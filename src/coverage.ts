@@ -31,14 +31,16 @@
  *    assigned to none. A source function with at least one assigned fnMap
  *    entry has a valid coverage identity (`matched: true`).
  *
- * 2. **Statements → matched source function.** Each Istanbul statement is
- *    owned by AT MOST ONE **matched** source function: the uniquely
- *    most-specific matched function containing the statement's line+column
- *    range. A statement whose most-specific containing matched function is
- *    an inner callback is NOT attributed to its outer parent — statements
- *    belonging to an inner callback never contribute to the outer
- *    function's numerator or denominator. Ambiguous statements (tied
- *    candidates) are excluded conservatively.
+ * 2. **Statements → owning source function, then matched filter.** Each
+ *    Istanbul statement is owned by AT MOST ONE source function: the uniquely
+ *    most-specific containing function determined across ALL source
+ *    functions first (not just matched ones), using exact range containment
+ *    ordering. If that owner is matched, the statement is credited to it. If
+ *    the owner is unmatched (or ownership is ambiguous), the statement is
+ *    excluded entirely — it does NOT fall through to a matched parent. A
+ *    statement belonging to an inner unmatched function never contributes to
+ *    the outer function's numerator or denominator. This preserves one-to-one
+ *    ownership and partial coverage.
  *
  * 3. **Fraction.** Within the correctly owned statements, coverage = covered
  *    statement count / total owned statement count. An uncovered function
@@ -267,55 +269,140 @@ function locContainedInFn(
 }
 
 /**
- * Compute a total ordering size for a function range for "most specific"
- * comparisons: smaller size = more specific. The size is line-dominant with a
- * column tiebreak, scaled to keep the column component below one line of
- * resolution.
+ * Test whether the range `[innerStart, innerEnd]` is strictly contained within
+ * the range `[outerStart, outerEnd]`. Both ranges use 0-based columns.
+ *
+ * "Strictly contained" means the inner range is a subset of the outer range
+ * AND is not equal to it (at least one boundary differs). This is the exact
+ * ordering primitive for "most specific" comparisons: a strictly-contained
+ * range is more specific (smaller) than its container.
+ *
+ * Comparison is lexicographic on (line, column) — line dominates, column
+ * breaks ties — so columns of any magnitude are handled correctly without
+ * numeric scaling heuristics.
  */
-function fnRangeSize(fn: FunctionInfo): number {
-  const lineSpan = (fn.endLine - fn.startLine) * 100000;
-  const colSpan = fn.endColumn - fn.startColumn;
-  return lineSpan + colSpan;
+function rangeStrictlyContainsRange(
+  outerStartLine: number,
+  outerStartColumn: number,
+  outerEndLine: number,
+  outerEndColumn: number,
+  innerStartLine: number,
+  innerStartColumn: number,
+  innerEndLine: number,
+  innerEndColumn: number,
+): boolean {
+  // inner.start >= outer.start (lexicographically)
+  const startCmp = comparePositions(
+    innerStartLine,
+    innerStartColumn,
+    outerStartLine,
+    outerStartColumn,
+  );
+  // inner.end <= outer.end (lexicographically)
+  const endCmp = comparePositions(
+    innerEndLine,
+    innerEndColumn,
+    outerEndLine,
+    outerEndColumn,
+  );
+  // Contained: start >= outer.start AND end <= outer.end.
+  // Strict: contained AND not equal (start > outer.start OR end < outer.end).
+  return startCmp >= 0 && endCmp <= 0 && (startCmp > 0 || endCmp < 0);
 }
 
 /**
  * Find the uniquely most-specific source function that contains `loc`.
  *
- * "Most specific" = the function with the smallest line+column source range
- * that contains the loc. Ties (two or more candidates with equal range size)
- * are ambiguous: the entry is assigned to none (returns null).
+ * "Most specific" = the function whose line+column source range is the unique
+ * minimum under the containment partial order: no other candidate's range is
+ * strictly contained within it. Equivalently, the smallest containing range.
+ *
+ * Ties are rejected conservatively:
+ * - Two candidates with identical ranges → both minimal → tie → null.
+ * - Two candidates with incomparable ranges (neither contains the other, both
+ *   contain the loc) → both minimal → tie → null.
+ *
+ * This uses exact lexicographic (line, column) comparison rather than a
+ * numeric size heuristic, so columns of any magnitude are ordered correctly.
  */
 function mostSpecificContainer(
   fns: FunctionInfo[],
   locStart: Position,
   locEnd: Position,
 ): number | null {
-  let bestIdx: number | null = null;
-  let bestSize = Infinity;
+  // Collect all candidates whose range contains the loc.
+  const candidates: number[] = [];
   for (let i = 0; i < fns.length; i++) {
     const fn = fns[i];
     if (fn === undefined) {
       continue;
     }
     if (locContainedInFn(fn, locStart, locEnd)) {
-      const size = fnRangeSize(fn);
-      if (size < bestSize) {
-        bestSize = size;
-        bestIdx = i;
-      } else if (size === bestSize) {
-        // Ambiguous tie: assign to none.
-        bestIdx = null;
-      }
+      candidates.push(i);
     }
   }
-  return bestIdx;
+  if (candidates.length === 0) {
+    return null;
+  }
+  if (candidates.length === 1) {
+    return candidates[0]!;
+  }
+
+  // Find minimal candidates: those where no other candidate is strictly
+  // contained within them (no other candidate has a strictly smaller range).
+  const minimal: number[] = [];
+  for (const i of candidates) {
+    const fnI = fns[i]!;
+    let isMinimal = true;
+    for (const j of candidates) {
+      if (j === i) {
+        continue;
+      }
+      const fnJ = fns[j]!;
+      // Is fnJ strictly contained within fnI? If so, fnI is not minimal.
+      if (
+        rangeStrictlyContainsRange(
+          fnI.startLine,
+          fnI.startColumn,
+          fnI.endLine,
+          fnI.endColumn,
+          fnJ.startLine,
+          fnJ.startColumn,
+          fnJ.endLine,
+          fnJ.endColumn,
+        )
+      ) {
+        isMinimal = false;
+        break;
+      }
+    }
+    if (isMinimal) {
+      minimal.push(i);
+    }
+  }
+
+  // Unique minimal → the most-specific container.
+  // Zero or multiple minimals → ambiguous/tie → assign to none.
+  if (minimal.length === 1) {
+    return minimal[0]!;
+  }
+  return null;
 }
 
 /**
- * Find the uniquely most-specific **matched** source function that contains
- * a statement's line+column range. Same tie-rejection rule as
- * {@link mostSpecificContainer}, but only considers functions that already
- * have a valid coverage identity (an assigned fnMap entry).
+ * Find the owning source function for a statement, applying the matched-only
+ * filter as an exclusion — never a fall-through.
+ *
+ * The statement's uniquely most-specific owning function is determined across
+ * ALL source functions first (using {@link mostSpecificContainer}). If that
+ * owner is matched (has a valid coverage identity), the statement is credited
+ * to it. If the owner is unmatched, the statement is excluded entirely — it
+ * does NOT fall through to a matched parent. If ownership is ambiguous (tie),
+ * the statement is also excluded.
+ *
+ * This preserves one-to-one ownership: every statement is owned by at most
+ * one function, and a statement whose most-specific owner is unmatched
+ * contributes to no function's numerator or denominator.
  */
 function mostSpecificMatchedContainer(
   fns: FunctionInfo[],
@@ -323,25 +410,15 @@ function mostSpecificMatchedContainer(
   stmtStart: Position,
   stmtEnd: Position,
 ): number | null {
-  let bestIdx: number | null = null;
-  let bestSize = Infinity;
-  for (let i = 0; i < fns.length; i++) {
-    const fn = fns[i];
-    if (fn === undefined || !matchedFlags[i]) {
-      continue;
-    }
-    if (locContainedInFn(fn, stmtStart, stmtEnd)) {
-      const size = fnRangeSize(fn);
-      if (size < bestSize) {
-        bestSize = size;
-        bestIdx = i;
-      } else if (size === bestSize) {
-        // Ambiguous tie: this statement is owned by none.
-        bestIdx = null;
-      }
-    }
+  const ownerIdx = mostSpecificContainer(fns, stmtStart, stmtEnd);
+  if (ownerIdx === null) {
+    return null;
   }
-  return bestIdx;
+  if (!matchedFlags[ownerIdx]) {
+    // The most-specific owner is unmatched → exclude, do not fall through.
+    return null;
+  }
+  return ownerIdx;
 }
 
 /**
