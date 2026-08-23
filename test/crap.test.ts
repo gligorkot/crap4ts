@@ -9,6 +9,7 @@ import {
   EXIT_THRESHOLD_EXCEEDED,
   EXIT_INVALID_INPUT,
 } from "../src/crap.js";
+import type { CrapResult } from "../src/crap.js";
 
 describe("computeCrap", () => {
   it("returns complexity alone when coverage is 100% (additive term zero)", () => {
@@ -96,6 +97,38 @@ describe("evaluateThreshold", () => {
     expect(() => evaluateThreshold(r, Number.POSITIVE_INFINITY)).toThrow(
       RangeError,
     );
+  });
+
+  it("rejects NaN thresholds", () => {
+    const r = computeCrap(1, 1);
+    expect(() => evaluateThreshold(r, NaN)).toThrow(RangeError);
+  });
+
+  it("rejects forged NaN CRAP score in threshold evaluation", () => {
+    const forged: CrapResult = { complexity: 5, coverage: 0.5, crap: NaN };
+    expect(() => evaluateThreshold(forged, 8)).toThrow(RangeError);
+  });
+
+  it("rejects forged Infinity CRAP score in threshold evaluation", () => {
+    const forged: CrapResult = {
+      complexity: 5,
+      coverage: 0.5,
+      crap: Number.POSITIVE_INFINITY,
+    };
+    expect(() => evaluateThreshold(forged, 8)).toThrow(RangeError);
+  });
+});
+
+describe("computeCrap — overflow guard", () => {
+  it("rejects extremely large complexity to prevent overflow", () => {
+    expect(() => computeCrap(1_000_001, 0)).toThrow(RangeError);
+    expect(() => computeCrap(1_000_001, 0.5)).toThrow(RangeError);
+  });
+
+  it("accepts complexity at the guard boundary", () => {
+    // 1_000_000^2 = 1e12, well within safe double range.
+    const r = computeCrap(1_000_000, 0);
+    expect(Number.isFinite(r.crap)).toBe(true);
   });
 });
 

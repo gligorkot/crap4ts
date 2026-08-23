@@ -10,19 +10,22 @@ function makeFn(
   endLine: number,
   coverage: number,
   matched = true,
-  count = coverage > 0 ? 1 : 0,
+  totalStatements = coverage > 0 ? 1 : 0,
+  coveredStatements = coverage > 0 ? 1 : 0,
 ): FunctionCoverage {
   const fi: FunctionInfo = {
     name,
     displayName: name,
     startLine,
     endLine,
+    startColumn: 0,
+    endColumn: 100,
     startOffset: 0,
     endOffset: 100,
     complexity,
     filePath: `/src/${name}.ts`,
   };
-  return { functionInfo: fi, coverage, matched, count };
+  return { functionInfo: fi, coverage, matched, totalStatements, coveredStatements };
 }
 
 describe("buildReportRows", () => {

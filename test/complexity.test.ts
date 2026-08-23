@@ -118,6 +118,63 @@ const arrow = (x) => x + 1;`;
   });
 });
 
+describe("analyzeSource — anonymous FunctionExpression name inference", () => {
+  it("infers name from variable declaration for anonymous function expression", () => {
+    const src = `const handler = function(x) { return x; };`;
+    const funcs = analyzeSource("test.ts", src);
+    const handler = funcs.find((f) => f.displayName === "handler");
+    expect(handler).toBeDefined();
+    expect(handler?.name).toBe("handler");
+  });
+
+  it("infers name from variable declaration for anonymous arrow function", () => {
+    const src = `const callback = (x) => x + 1;`;
+    const funcs = analyzeSource("test.ts", src);
+    const callback = funcs.find((f) => f.displayName === "callback");
+    expect(callback).toBeDefined();
+    expect(callback?.name).toBe("callback");
+  });
+
+  it("infers name from PropertyAssignment for function expression in object", () => {
+    const src = `const obj = { handler: function(x) { return x; } };`;
+    const funcs = analyzeSource("test.ts", src);
+    const handler = funcs.find((f) => f.displayName === "handler");
+    expect(handler).toBeDefined();
+    expect(handler?.name).toBe("handler");
+  });
+
+  it("infers name from PropertyAssignment for arrow function in object", () => {
+    const src = `const obj = { onClick: (e) => e.target };`;
+    const funcs = analyzeSource("test.ts", src);
+    const onClick = funcs.find((f) => f.displayName === "onClick");
+    expect(onClick).toBeDefined();
+    expect(onClick?.name).toBe("onClick");
+  });
+
+  it("infers name from PropertyDeclaration for arrow function in class", () => {
+    const src = `class C { handler = (x) => x + 1; }`;
+    const funcs = analyzeSource("test.ts", src);
+    const handler = funcs.find((f) => f.displayName === "handler");
+    expect(handler).toBeDefined();
+    expect(handler?.name).toBe("handler");
+  });
+
+  it("infers name from PropertyDeclaration for function expression in class", () => {
+    const src = `class C { process = function(x) { return x; }; }`;
+    const funcs = analyzeSource("test.ts", src);
+    const processFn = funcs.find((f) => f.displayName === "process");
+    expect(processFn).toBeDefined();
+    expect(processFn?.name).toBe("process");
+  });
+
+  it("uses <anonymous> for unnamed function expression not assigned to anything", () => {
+    const src = `call(function() { return 1; });`;
+    const funcs = analyzeSource("test.ts", src);
+    const anon = funcs.find((f) => f.displayName === "<anonymous>");
+    expect(anon).toBeDefined();
+  });
+});
+
 describe("analyzeSource on full fixture file", () => {
   it("finds all expected functions with correct complexity", () => {
     const fs = require("node:fs");

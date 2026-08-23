@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
+import * as fs from "node:fs";
 
 const FIXTURE = path.resolve(__dirname, "fixtures/sample.ts");
 const COVERAGE = path.resolve(__dirname, "fixtures/coverage-sample.json");
@@ -94,5 +95,36 @@ describe("CLI integration", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Error:");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("exits 1 for empty source directory with missing --coverage path", () => {
+    // An empty source directory combined with a missing coverage file must
+    // exit 1 (invalid input), not 0 (empty-result success). Coverage is a
+    // required input; its absence is always an error regardless of source content.
+    const emptyDir = path.resolve(__dirname, "fixtures/empty-dir");
+    fs.mkdirSync(emptyDir, { recursive: true });
+    try {
+      const result = runCli([emptyDir, "--coverage", "/no/such/file.json"]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("coverage file does not exist");
+    } finally {
+      fs.rmdirSync(emptyDir);
+    }
+  });
+
+  it("exits 0 for empty source directory with valid --coverage path", () => {
+    // An empty source directory with a valid (existing) coverage file should
+    // exit 0 with the empty result — coverage exists, just no source to analyze.
+    const emptyDir = path.resolve(__dirname, "fixtures/empty-dir");
+    fs.mkdirSync(emptyDir, { recursive: true });
+    try {
+      const result = runCli([emptyDir, "--coverage", COVERAGE, "--json"]);
+      expect(result.code).toBe(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.rows).toEqual([]);
+      expect(parsed.summary.totalFunctions).toBe(0);
+    } finally {
+      fs.rmdirSync(emptyDir);
+    }
   });
 });
