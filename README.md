@@ -106,22 +106,40 @@ npx crap4ts src --coverage coverage/coverage-final.json
    enclosing function's complexity.
 
 3. **Coverage mapping** — Each discovered function is matched to an Istanbul
-   `fnMap` entry by **containment**: the coverage entry's `loc` line range must
-   be fully within the function's [startLine, endLine] range (the function
-   declaration header often precedes the first executable line, so the loc is
-   a sub-range of the function). The most specific (largest) matching loc is
-   chosen. When two or more locs tie for the largest size, the match is
-   ambiguous and rejected (coverage 0, matched: false). Partial overlaps are
-   not sufficient. File-path matching uses exact path comparison first, then
-   falls back to unambiguous suffix matching — if two or more coverage entries
-   share the same path suffix, the match is rejected. A function with no
-   unambiguous matching coverage entry reports coverage 0 (it is never dropped
-   from the report).
+   file entry by an unambiguous project-relative path match (exact normalized
+   path, or anchored suffix where the full source relative path is a suffix of
+   the coverage path — basename-only matches are rejected). Within the matched
+   file, the function is associated to the fnMap entry whose `loc` is contained
+   within the function's line+column range and is the most specific (smallest
+   containing loc). This is used only for identity association.
 
-   **v1 coverage semantics**: Coverage is **executed / not-executed function
-   hit coverage** — it records whether a function was entered at least once
-   (execution count > 0 = covered, 0 = uncovered). It is **not** statement or
-   branch coverage and does not measure partial function execution.
+   **Coverage fraction semantics**: Coverage is derived from Istanbul
+   `statementMap` / `s` data — the fraction of statements whose ranges fall
+   within the function's line+column source range that were executed at least
+   once. This is `coveredStatements / totalStatements`, a per-function covered
+   fraction over a meaningful execution denominator. This mirrors the core
+   invariant of the reference implementations:
+   - **Java/JaCoCo**: covered instructions / total instructions per method
+   - **Go**: covered coverage statements / total statements in the function
+     line range
+   - **Clojure**: covered forms / total forms in the function line range
+
+   Partial execution produces `0 < coverage < 1`. An uncovered function (all
+   statements have count 0) reports coverage 0. A function with no matching
+   coverage entry reports coverage 0 (`matched: false`). A fully executed
+   function reports coverage 1. The fnMap boolean hit (`f[id] > 0`) is never
+   treated as 100% coverage — it is used only for identity association.
+
+   When a function has no statements in its source range (e.g. a declaration
+   with no executable body, or a file entry without `statementMap`/`s` data),
+   coverage is 0 with `matched` reflecting whether a fnMap identity was found.
+
+   **Limitation**: Istanbul statement coverage counts a statement as covered
+   if it was executed at least once. It does not measure branch-level or
+   condition-level coverage within a single statement (e.g. short-circuit
+   operators). This is the same granularity as Go's statement coverage and
+   is sufficient for the CRAP metric's purpose of measuring execution
+   density per function.
 
 4. **CRAP computation** — The formula is applied per function, results are
    sorted by CRAP descending, and any score above the threshold fails the gate.
@@ -155,14 +173,20 @@ jobs:
 
 The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the CLI
 from source against this repo's own `src/` directory using the coverage
-generated in the previous step. It asserts that the CLI exits 2 (threshold
-exceeded) — the breach is expected because `cli.ts` functions (`parseArgs`,
-`main`) have high cyclomatic complexity and no direct test coverage (they are
-exercised via subprocess in tests, which V8 does not attribute to the source
-file). The script exits 0 only when the expected breach occurs; it exits
-non-zero if the CLI exits 0 (no breach — coverage missing), exits 1 (invalid
-input), or produces any other unexpected error. This replaces the previous
-bare `continue-on-error: true` which masked all failures.
+generated in the previous step. It asserts that:
+1. The CLI exits 2 (threshold exceeded).
+2. JSON rows named `parseArgs` and `main` exist in the output.
+3. Those rows are unmatched/uncovered (coverage 0) and exceed the threshold.
+4. No unexpected functions breach the threshold (unexpected-only breaches
+   are rejected).
+
+The breach is expected because `cli.ts` functions (`parseArgs`, `main`)
+have high cyclomatic complexity and no direct test coverage (they are
+exercised via subprocess in tests, which V8 does not attribute to the
+source file). The pure validation logic is in
+`src/self-score-helpers.ts` and has unit test coverage via
+`test/self-score.test.ts`. The script exits 0 only when the expected
+breach occurs and is fully explained; it exits non-zero otherwise.
 
 ## Current v1 support and limitations
 
@@ -180,7 +204,7 @@ bare `continue-on-error: true` which masked all failures.
   coverage gate, not a mutation score. A slow mutation-based hardener is a
   future gate, not part of this release.
 - Framework-specific coverage adapters beyond Istanbul/V8 format
-- Branch-level coverage granularity (v1 uses function-level boolean coverage)
+- Branch-level coverage granularity (v1 uses Istanbul statement-level coverage)
 - Configuration files (`.crap4tsrc`); all config is via CLI flags
 - Architecture/dependency enforcement
 - Agent orchestration or automated refactoring
