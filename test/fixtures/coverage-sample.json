@@ -1,0 +1,32 @@
+{
+  "/abs/path/sample.ts": {
+    "path": "/abs/path/sample.ts",
+    "fnMap": {
+      "0": {
+        "name": "plain",
+        "decl": { "start": { "line": 3, "column": 16 }, "end": { "line": 3, "column": 21 } },
+        "loc": { "start": { "line": 3, "column": 24 }, "end": { "line": 4, "column": null } }
+      },
+      "1": {
+        "name": "withIf",
+        "decl": { "start": { "line": 6, "column": 16 }, "end": { "line": 6, "column": 21 } },
+        "loc": { "start": { "line": 6, "column": 32 }, "end": { "line": 9, "column": null } }
+      },
+      "2": {
+        "name": "(anonymous_2)",
+        "decl": { "start": { "line": 11, "column": 8 }, "end": { "line": 11, "column": 13 } },
+        "loc": { "start": { "line": 11, "column": 28 }, "end": { "line": 11, "column": null } }
+      }
+    },
+    "f": {
+      "0": 5,
+      "1": 0,
+      "2": 3
+    },
+    "statementMap": {},
+    "s": {},
+    "b": {},
+    "branchMap": {},
+    "meta": {}
+  }
+}
