@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatSelfScoreAudit,
   validateSelfScoreBreach,
   EXPECTED_BREACH_NAMES,
 } from "../src/self-score-helpers.js";
@@ -10,6 +11,7 @@ function makeRow(
   crap: number,
   coverage: number,
   matched = false,
+  threshold = THRESHOLD,
 ): SelfScoreRow {
   return {
     name,
@@ -23,10 +25,40 @@ function makeRow(
     coverageMatched: matched,
     totalStatements: coverage > 0 ? 1 : 0,
     coveredStatements: coverage > 0 ? 1 : 0,
+    threshold,
   };
 }
 
 const THRESHOLD = 30;
+
+describe("formatSelfScoreAudit", () => {
+  it("prints the maximum score and only the expected breached rows with audit fields", () => {
+    const report: SelfScoreReport = {
+      rows: [
+        makeRow("parseArgs", 50, 0),
+        makeRow("main", 45, 0),
+        makeRow("computeCrap", 5, 1),
+      ],
+      summary: {
+        totalFunctions: 3,
+        breachedCount: 2,
+        maxCrap: 50,
+        threshold: THRESHOLD,
+        breached: true,
+      },
+    };
+
+    expect(formatSelfScoreAudit(report)).toBe(
+      [
+        "Self-score audit evidence:",
+        "Maximum CRAP score: 50.0.",
+        "Expected breached rows:",
+        "- parseArgs: CRAP 50.0, coverage 0.0%, threshold 30.0",
+        "- main: CRAP 45.0, coverage 0.0%, threshold 30.0",
+      ].join("\n"),
+    );
+  });
+});
 
 describe("validateSelfScoreBreach", () => {
   it("passes when parseArgs and main exist, are uncovered, and breach threshold", () => {
@@ -145,6 +177,64 @@ describe("validateSelfScoreBreach", () => {
     const err = validateSelfScoreBreach(report, 100);
     expect(err).not.toBeNull();
     expect(err).toContain("breach threshold");
+  });
+
+  it("fails when an expected row does not breach its applicable threshold", () => {
+    const report: SelfScoreReport = {
+      rows: [makeRow("parseArgs", 50, 0, false, 60), makeRow("main", 45, 0)],
+      summary: {
+        totalFunctions: 2,
+        breachedCount: 1,
+        maxCrap: 50,
+        threshold: THRESHOLD,
+        breached: true,
+      },
+    };
+
+    const err = validateSelfScoreBreach(report, THRESHOLD);
+
+    expect(err).toContain("parseArgs");
+    expect(err).toContain("60");
+  });
+
+  it("fails when an unexpected row breaches its applicable threshold", () => {
+    const report: SelfScoreReport = {
+      rows: [
+        makeRow("parseArgs", 150, 0),
+        makeRow("main", 145, 0),
+        makeRow("mysteryFn", 40, 0, false, 30),
+      ],
+      summary: {
+        totalFunctions: 3,
+        breachedCount: 3,
+        maxCrap: 150,
+        threshold: 100,
+        breached: true,
+      },
+    };
+
+    const err = validateSelfScoreBreach(report, 100);
+
+    expect(err).toContain("Unexpected threshold breach");
+    expect(err).toContain("mysteryFn");
+  });
+
+  it("fails when the report summary threshold differs from the self-score threshold", () => {
+    const report: SelfScoreReport = {
+      rows: [makeRow("parseArgs", 50, 0), makeRow("main", 45, 0)],
+      summary: {
+        totalFunctions: 2,
+        breachedCount: 2,
+        maxCrap: 50,
+        threshold: 31,
+        breached: true,
+      },
+    };
+
+    const err = validateSelfScoreBreach(report, THRESHOLD);
+
+    expect(err).toContain("summary threshold");
+    expect(err).toContain("31");
   });
 
   it("EXPECTED_BREACH_NAMES contains parseArgs and main", () => {

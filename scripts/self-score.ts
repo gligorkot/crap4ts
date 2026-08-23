@@ -14,7 +14,7 @@
  *    a. Rows named "parseArgs" and "main" exist in the JSON output.
  *    b. Those rows are unmatched/uncovered (coverageMatched: false or
  *       coverage === 0).
- *    c. Those rows exceed the threshold (crap > threshold).
+ *    c. Those rows exceed their applicable row thresholds (crap > row.threshold).
  *    d. Every other breaching row is also explained (no unexpected-only
  *       breaches).
  *
@@ -34,6 +34,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  formatSelfScoreAudit,
   validateSelfScoreBreach,
   EXPECTED_BREACH_NAMES,
 } from "../src/self-score-helpers.js";
@@ -110,18 +111,17 @@ function assertExpectedBreach(): void {
     if (validationError !== null) {
       console.error(`Error: self-score validation failed: ${validationError}`);
       console.error("Breaching rows:");
-      const breaches = parsed.rows.filter((r) => r.crap > thresholdNum);
-      for (const r of breaches) {
+      const breaches = parsed.rows.filter((row) => row.crap > row.threshold);
+      for (const row of breaches) {
         console.error(
-          `  ${r.displayName}: crap=${r.crap.toFixed(1)}, coverage=${r.coverage}, matched=${r.coverageMatched}`,
+          `  ${row.displayName}: crap=${row.crap.toFixed(1)}, coverage=${row.coverage}, matched=${row.coverageMatched}, threshold=${row.threshold}`,
         );
       }
       process.exit(1);
     }
 
-    console.log(
-      `Self-score OK: expected threshold breach confirmed (max CRAP ${parsed.summary.maxCrap?.toFixed(1)} > ${THRESHOLD}).`,
-    );
+    console.log("Self-score OK: expected threshold breach confirmed.");
+    console.log(formatSelfScoreAudit(parsed));
     console.log(
       "The breach is expected: cli.ts functions (parseArgs, main) have high cyclomatic complexity and no direct test coverage (they are exercised via subprocess, which V8 does not attribute to the source file). Coverage fraction semantics: these functions report coverage 0 because no statements within their source range were executed.",
     );
