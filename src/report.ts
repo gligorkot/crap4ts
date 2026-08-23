@@ -31,8 +31,16 @@ export interface ReportRow {
 /**
  * The full report: all rows sorted by CRAP descending, plus summary stats.
  */
+export interface ReportFilter {
+  readonly mode: "changed";
+  readonly changedSince: string;
+  readonly mergeBase: string;
+  readonly changedFileCount: number;
+}
+
 export interface CrapReport {
   readonly rows: ReportRow[];
+  readonly filter?: ReportFilter;
   readonly summary: {
     readonly totalFunctions: number;
     readonly breachedCount: number;
@@ -90,6 +98,7 @@ export function buildReport(
   coverage: FunctionCoverage[],
   threshold: number,
   thresholdForPath: (filePath: string) => number = () => threshold,
+  filter?: ReportFilter,
 ): CrapReport {
   const sorted = sortRows(buildReportRows(coverage, thresholdForPath));
   let maxCrap = 0;
@@ -104,6 +113,7 @@ export function buildReport(
   }
   return {
     rows: sorted,
+    ...(filter === undefined ? {} : { filter }),
     summary: {
       totalFunctions: sorted.length,
       breachedCount,
@@ -125,10 +135,15 @@ export function renderHumanReport(report: CrapReport): string {
   const lines: string[] = [];
   lines.push("CRAP Report");
   lines.push("===========");
+  if (report.filter !== undefined) {
+    lines.push(`Changed-only mode: since ${report.filter.changedSince}`);
+    lines.push(`Merge base: ${report.filter.mergeBase}`);
+    lines.push(`Changed files: ${report.filter.changedFileCount}`);
+  }
   lines.push("");
 
   if (report.rows.length === 0) {
-    lines.push("No functions found.");
+    lines.push(report.filter === undefined ? "No functions found." : "No eligible changed functions found.");
     lines.push("");
     lines.push(`Threshold: ${report.summary.threshold}`);
     lines.push(`Breached: ${report.summary.breached ? "YES" : "no"}`);

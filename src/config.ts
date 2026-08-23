@@ -32,6 +32,7 @@ export interface Crap4tsConfig {
   readonly exclude?: string | readonly string[];
   readonly threshold?: number;
   readonly thresholds?: readonly PathThresholdRule[];
+  readonly changedSince?: string;
 }
 
 export interface LoadedConfig {
@@ -108,7 +109,7 @@ export function isConfigExcluded(filePath: string, projectRoot: string, config: 
 
 function validateConfig(value: unknown, configRoot?: string): Crap4tsConfig {
   if (!isPlainObject(value)) throw new Error("config must export an object");
-  const allowed = new Set(["version", "src", "exclude", "threshold", "thresholds"]);
+  const allowed = new Set(["version", "src", "exclude", "threshold", "thresholds", "changedSince"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new Error(`config has unknown property "${key}"`);
   }
@@ -118,6 +119,7 @@ function validateConfig(value: unknown, configRoot?: string): Crap4tsConfig {
   const src = validateSourcePaths(value["src"], configRoot);
   const exclude = validateStringList(value["exclude"], "exclude");
   const threshold = validateThreshold(value["threshold"], "threshold");
+  const changedSince = validateChangedSince(value["changedSince"]);
   let thresholds: readonly PathThresholdRule[] | undefined;
   if (value["thresholds"] !== undefined) {
     if (!Array.isArray(value["thresholds"])) throw new Error("config.thresholds must be an array");
@@ -139,6 +141,7 @@ function validateConfig(value: unknown, configRoot?: string): Crap4tsConfig {
     ...(exclude === undefined ? {} : { exclude }),
     ...(threshold === undefined ? {} : { threshold }),
     ...(thresholds === undefined ? {} : { thresholds: Object.freeze(thresholds) }),
+    ...(changedSince === undefined ? {} : { changedSince }),
   });
 }
 
@@ -179,6 +182,14 @@ function validateSourcePaths(value: unknown, configRoot?: string): string | read
 function isContainedPath(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function validateChangedSince(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("config.changedSince must be a non-empty string");
+  }
+  return value;
 }
 
 function validateThreshold(value: unknown, name: string): number | undefined {

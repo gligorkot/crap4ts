@@ -49,6 +49,7 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | `--coverage <file>` | Path to Istanbul `coverage-final.json` (Vitest V8 output). **Required.** | — |
 | `--config <path>` | Load exactly this TS, ESM (`.mjs`), CommonJS (`.cjs`), module-system-dependent JS (`.js`), or JSON configuration file. | auto-discovery |
 | `--threshold <number>` | Override every configured CRAP failure threshold; breach when score > threshold. | `8` |
+| `--changed-since <git-ref>` | Gate only committed functions changed between `HEAD` and the merge base of this ref and `HEAD`. | off |
 | `--json` | Output JSON report instead of human-readable table. | off |
 | `--help` | Print usage and exit. | — |
 
@@ -86,6 +87,7 @@ export default defineConfig({
   src: ["src", "packages/api/src"],
   exclude: ["src/generated/**", "**/*.generated.ts"],
   threshold: 8,
+  changedSince: "origin/main", // optional default; CLI --changed-since wins
   thresholds: [
     { glob: "src/legacy/**", threshold: 15 },
     { glob: "src/security/**/*.ts", threshold: 4 },
@@ -144,6 +146,60 @@ never writes generated files into the project. Use `.mjs` for portable ESM and
 `.cjs` for portable CommonJS. A `.js` config follows Node's normal module-system
 rules from the nearest `package.json` (`type: "module"` for ESM; otherwise
 CommonJS), so it is not a universal ESM form.
+
+## Changed-only gates
+
+Use `--changed-since <git-ref>` (or config `changedSince`) to score only
+functions affected by committed changes. The CLI resolves `<git-ref>` to a
+commit, calculates `git merge-base <resolved-ref> HEAD`, then compares that
+merge base to `HEAD`. This is equivalent to the commit range
+`<merge-base>..HEAD`, so it includes all commits on the current branch since it
+diverged from the ref; it is not a two-dot comparison of the ref tip to HEAD.
+An explicit CLI value always overrides `changedSince` from config.
+
+For each changed `.ts`/`.tsx` file under the selected source paths, crap4ts
+parses the **complete current file** and performs normal per-file coverage
+ownership mapping before filtering report rows to functions whose inclusive
+source line range intersects a changed hunk. Parsing the whole file is
+intentional: nested functions and their statements retain the same ownership
+rules as a full report. Added files select all their functions. Deleted files
+have no current source to score and are ignored. Pure renames and binary/no-hunk
+changes select no functions; they never expand to a full-file or full-repository
+scan. An edited rename (Git `R<100`) conservatively selects all functions in its
+destination file, while only Git `R100` is treated as a pure rename with no
+eligible functions. A deletion hunk uses its new-file insertion boundary as its
+deterministic line location.
+
+```sh
+# Local branch compared with locally available main
+npx crap4ts src --coverage coverage/coverage-final.json --changed-since main
+
+# PR CI: checkout/fetch the base commit, then use the PR base SHA
+npx crap4ts src --coverage coverage/coverage-final.json \
+  --changed-since "$GITHUB_EVENT_PULL_REQUEST_BASE_SHA" --json
+```
+
+Changed-only mode appears in human output and adds `filter` metadata to JSON:
+`mode`, `changedSince`, resolved `mergeBase`, and `changedFileCount`. If valid
+source and coverage inputs yield no eligible changed functions, it reports that
+fact explicitly and exits 0; this is not presented as a full-repository passing
+report. Invalid Git availability, ref resolution, or merge-base discovery is an
+input error (exit 1).
+
+Changed-only selection deliberately considers committed `HEAD` only. To avoid
+reading source that differs from that commit, the command rejects staged,
+unstaged, or untracked `.ts`/`.tsx` worktree files (exit 1); commit or stash
+those files first. Non-TypeScript worktree files do not affect selection.
+Generated files remain subject to normal exclusions/config exclusions, so their
+changes can yield no eligible rows. Rename detection is used for safe path
+handling: an `R100` rename without content changes does not create a CRAP
+obligation, while an edited rename is conservatively included.
+
+Roll out deliberately: first run the JSON command as informational CI output,
+inspect `filter` metadata and coverage matches, then enable the threshold gate
+on PRs once the base ref is reliably fetched and generated-file exclusions are
+configured. Do not replace a full-repository gate until that policy decision is
+intentional.
 
 ## Generating coverage for crap4ts
 
