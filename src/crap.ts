@@ -97,28 +97,51 @@ export function assertIntegerAtLeast(
 }
 
 /**
+ * Maximum representable cyclomatic complexity before CRAP arithmetic risks
+ * overflow. With the formula `cc^2 * uncovered^3 + cc`, the additive term
+ * is bounded by `cc^2`. For `cc = 1e8`, `cc^2 = 1e16` which is within
+ * safe integer range. We cap at a generous but finite bound to guard
+ * against forged or pathological inputs while never affecting real code.
+ */
+const MAX_COMPLEXITY = 1_000_000;
+
+/**
  * Compute the CRAP score for a single function.
  *
  * Formula: `complexity^2 * (1 - coverage)^3 + complexity`.
  *
  * Inputs are validated: `complexity` must be an integer >= 1 and `coverage`
- * must be a finite decimal in [0, 1]. The result is a finite number.
+ * must be a finite decimal in [0, 1]. The result is guaranteed finite and
+ * non-NaN.
  *
  * Boundary behaviour:
  * - coverage 0  -> uncovered^3 = 1 -> `complexity^2 + complexity` (worst case)
  * - coverage 1  -> uncovered^3 = 0 -> `complexity` (fully covered, additive term zero)
  *
- * @throws {RangeError} on invalid inputs.
+ * @throws {RangeError} on invalid inputs (NaN, Infinity, out of range,
+ *   or complexity exceeding the overflow guard).
  */
 export function computeCrap(complexity: number, coverage: number): CrapResult {
   assertIntegerAtLeast(complexity, 1, "complexity");
   assertRange(coverage, 0, 1, "coverage");
+  if (complexity > MAX_COMPLEXITY) {
+    throw new RangeError(
+      `complexity must not exceed ${MAX_COMPLEXITY} to prevent CRAP arithmetic overflow, got ${complexity}`,
+    );
+  }
 
-  const cc = complexity; // already validated as finite integer >= 1
+  const cc = complexity; // validated finite integer in [1, MAX_COMPLEXITY]
   const uncovered = 1 - coverage; // coverage in [0,1] -> uncovered in [0,1]
   const additive = cc * cc * uncovered * uncovered * uncovered;
-  // cc >= 1 (finite), additive in [0, cc^2] (finite) -> sum finite.
   const crap = additive + cc;
+
+  // Final safety net: the result must be finite and non-NaN.
+  if (Number.isNaN(crap) || !Number.isFinite(crap)) {
+    throw new RangeError(
+      `CRAP computation produced a non-finite result (${crap}) for complexity=${complexity}, coverage=${coverage}`,
+    );
+  }
+
   return { complexity, coverage, crap };
 }
 
@@ -134,9 +157,20 @@ export function evaluateThreshold(
   result: CrapResult,
   threshold: number,
 ): ThresholdOutcome {
-  assertRange(threshold, 0, Number.POSITIVE_INFINITY, "threshold");
+  if (Number.isNaN(threshold)) {
+    throw new RangeError("threshold must not be NaN");
+  }
   if (!Number.isFinite(threshold)) {
     throw new RangeError("threshold must be finite");
+  }
+  if (threshold < 0) {
+    throw new RangeError(`threshold must be >= 0 but was ${threshold}`);
+  }
+  // Guard against a forged NaN/Infinity crap score sneaking into evaluation.
+  if (Number.isNaN(result.crap) || !Number.isFinite(result.crap)) {
+    throw new RangeError(
+      `cannot evaluate threshold against non-finite CRAP score: ${result.crap}`,
+    );
   }
   const breached = result.crap > threshold;
   return { result, breached, threshold };
