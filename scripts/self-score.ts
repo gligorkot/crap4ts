@@ -14,7 +14,7 @@
  *    a. Rows named "parseArgs" and "main" exist in the JSON output.
  *    b. Those rows are unmatched/uncovered (coverageMatched: false or
  *       coverage === 0).
- *    c. Those rows exceed the threshold (crap > threshold).
+ *    c. Those rows exceed their applicable row thresholds (crap > row.threshold).
  *    d. Every other breaching row is also explained (no unexpected-only
  *       breaches).
  *
@@ -111,10 +111,10 @@ function assertExpectedBreach(): void {
     if (validationError !== null) {
       console.error(`Error: self-score validation failed: ${validationError}`);
       console.error("Breaching rows:");
-      const breaches = parsed.rows.filter((r) => r.crap > thresholdNum);
-      for (const r of breaches) {
+      const breaches = parsed.rows.filter((row) => row.crap > row.threshold);
+      for (const row of breaches) {
         console.error(
-          `  ${r.displayName}: crap=${r.crap.toFixed(1)}, coverage=${r.coverage}, matched=${r.coverageMatched}`,
+          `  ${row.displayName}: crap=${row.crap.toFixed(1)}, coverage=${row.coverage}, matched=${row.coverageMatched}, threshold=${row.threshold}`,
         );
       }
       process.exit(1);

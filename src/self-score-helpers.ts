@@ -86,9 +86,13 @@ export function validateSelfScoreBreach(
   threshold: number,
   expectedNames: readonly string[] = EXPECTED_BREACH_NAMES,
 ): string | null {
-  const breaches = report.rows.filter((r) => r.crap > threshold);
+  if (report.summary.threshold !== threshold) {
+    return `Report summary threshold ${report.summary.threshold} does not match self-score threshold ${threshold}`;
+  }
 
-  // Every expected function must be present and breaching.
+  const breaches = report.rows.filter((row) => row.crap > row.threshold);
+
+  // Every expected function must be present and breaching its applicable threshold.
   for (const name of expectedNames) {
     const row = report.rows.find(
       (r) => r.name === name || r.displayName === name,
@@ -96,8 +100,8 @@ export function validateSelfScoreBreach(
     if (row === undefined) {
       return `Expected breach function "${name}" not found in report rows`;
     }
-    if (row.crap <= threshold) {
-      return `Expected "${name}" to breach threshold ${threshold} but crap=${row.crap}`;
+    if (row.crap <= row.threshold) {
+      return `Expected "${name}" to breach threshold ${row.threshold} (applicable row threshold) but crap=${row.crap}`;
     }
     // Must be unmatched or uncovered (coverage 0).
     if (row.coverage > 0) {

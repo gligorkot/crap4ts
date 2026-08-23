@@ -304,15 +304,15 @@ occurs and is fully explained; it exits non-zero otherwise.
 
 Tests, coverage, and self-score run the CLI from source TypeScript via
 [tsx](https://github.com/privatenumber/tsx) — no build step is required for
-development or CI. `.nvmrc` pins the validated Node 22 runtime to `22.22.3`,
-so use `nvm use` (or an equivalent version manager) before installing
+development or CI. `.nvmrc` is the source of truth for the validated Node 22
+runtime, so use `nvm use` (or an equivalent version manager) before installing
 dependencies. A freshly cloned checkout can run the CI-equivalent suite with
 `npm ci && npm run typecheck && npm run coverage && npm run build && npm run self-score`.
 CI deliberately uses `npm run coverage` as its one test execution because it
 runs the Vitest suite and produces the coverage artifact consumed by self-score.
 
 ```sh
-nvm use             # read the validated 22.22.3 runtime from .nvmrc
+nvm use             # read the validated runtime from .nvmrc
 npm ci              # install dependencies exactly as CI does
 npm run typecheck   # tsc --noEmit
 npm run coverage    # Vitest test execution used by CI; generates coverage/coverage-final.json
