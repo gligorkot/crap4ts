@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Coverage
+        run: npm run coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Self-score (assert expected threshold breach)
+        run: npm run self-score
+        # The self-score script (scripts/self-score.ts, run via tsx) asserts
+        # that the CLI exits 2 (threshold exceeded) when run against this
+        # repo's own source and coverage. The breach is expected: cli.ts
+        # functions (parseArgs, main) have high cyclomatic complexity and no
+        # direct test coverage (they are exercised via subprocess in tests,
+        # which V8 does not attribute to the source file). The script exits 0
+        # only when the expected breach occurs; it exits non-zero if the CLI
+        # exits 0 (no breach — coverage missing), exits 1 (invalid input), or
+        # produces any other unexpected error. This replaces the previous
+        # bare `continue-on-error: true` which masked all failures.
