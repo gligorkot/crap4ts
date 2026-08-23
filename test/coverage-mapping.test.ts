@@ -557,16 +557,14 @@ describe("mapFileCoverage — tied identity rejection", () => {
 });
 
 describe("mapFileCoverage — unrelated paths / statement exclusion", () => {
-  it("a statement inside an unmatched inner function is not attributed to a matched outer", () => {
-    // Outer (1-10) has its own fnMap entry → matched. Inner (5-7) has a fnMap
-    // entry, but there's ALSO a sibling fn (5-7) with the same range, making
-    // the inner's entry ambiguous → inner unmatched. A statement at 5-6 is
-    // contained in outer (matched) and in both inner candidates (unmatched,
-    // so not considered). The most-specific *matched* container is outer.
-    // BUT: outer's own loc (1-10) and the statement (5-6) — outer is the only
-    // matched container → statement attributed to outer.
-    // This verifies that unmatched functions are correctly skipped in the
-    // statement ownership pass.
+  it("a statement inside unmatched tied inner functions is not attributed to a matched outer", () => {
+    // Outer (1-10) has its own fnMap entry → matched. innerA (5-7) and
+    // innerB (5-7) each have a fnMap entry, but both entries are contained
+    // in both inner functions with equal range → tie → assigned to neither
+    // → both inner functions unmatched.
+    // Statement at 5-6: most-specific owner across ALL functions is
+    // ambiguous (innerA and innerB tied at range 5-7) → excluded. The
+    // statement does NOT fall through to the matched outer.
     const entry = makeFileEntry(
       {
         "0": { name: "outer", start: 1, end: 10 },
@@ -590,15 +588,216 @@ describe("mapFileCoverage — unrelated paths / statement exclusion", () => {
     const innerAResult = results[1]!;
     const innerBResult = results[2]!;
 
-    // Outer matched, owns all 3 statements (inner A/B unmatched, so the
-    // most-specific matched container for every statement is outer).
+    // Outer matched, owns only its outer-only statements (1-4, 8-10) = 2.
+    // The statement at 5-6 is ambiguous between innerA and innerB (tied
+    // ranges 5-7) → excluded entirely. It does not fall through to outer.
     expect(outerResult.matched).toBe(true);
-    expect(outerResult.totalStatements).toBe(3);
+    expect(outerResult.totalStatements).toBe(2);
+    expect(outerResult.coveredStatements).toBe(2);
     expect(outerResult.coverage).toBe(1);
 
     // Inner A and B: their fnMap entries (5-7) are tied (identical ranges)
     // → assigned to neither → unmatched.
     expect(innerAResult.matched).toBe(false);
+    expect(innerAResult.totalStatements).toBe(0);
     expect(innerBResult.matched).toBe(false);
+    expect(innerBResult.totalStatements).toBe(0);
+  });
+
+  it("a statement in an unmatched inner (no sibling) does not fall through to a matched outer", () => {
+    // Outer (1-10) has its own fnMap entry → matched. Inner (5-7) has a
+    // fnMap entry too, but the inner's entry loc (5-7) is also contained in
+    // a sibling innerB (5-7) with the same range → inner entry ties → inner
+    // unmatched. A statement at 5-6 is owned most-specifically by the inner
+    // pair (range 5-7) — the inner is the uniquely-smallest container.
+    // But the inner is unmatched → the statement is excluded, NOT credited
+    // to the matched outer. Outer keeps its own outer-only statements only.
+    //
+    // Variant: here inner has no fnMap entry at all (truly unmatched, no
+    // ambiguity). Statement at 5-6 is most-specifically owned by inner
+    // (range 5-7), which is unmatched → excluded. Outer gets only 1-4, 8-10.
+    const entry = makeFileEntry(
+      {
+        "0": { name: "outer", start: 1, end: 10 },
+      },
+      { "0": 1 },
+      "/abs/path/sample.ts",
+      {
+        "0": { start: 1, end: 4 },
+        "1": { start: 5, end: 6 },
+        "2": { start: 8, end: 10 },
+      },
+      { "0": 1, "1": 1, "2": 1 },
+    );
+    const outer = makeFunction("outer", 1, 10);
+    const inner = makeFunction("inner", 5, 7);
+    const results = mapFileCoverage(entry, [outer, inner]);
+    const outerResult = results[0]!;
+    const innerResult = results[1]!;
+
+    // Outer matched via its fnMap entry. Outer owns statements 1-4 and 8-10
+    // (2 statements). Statement 5-6 is owned most-specifically by inner
+    // (range 5-7 ⊂ outer range 1-10), but inner is unmatched → excluded.
+    expect(outerResult.matched).toBe(true);
+    expect(outerResult.totalStatements).toBe(2);
+    expect(outerResult.coveredStatements).toBe(2);
+    expect(outerResult.coverage).toBe(1);
+
+    // Inner has no fnMap entry → unmatched, zero statements.
+    expect(innerResult.matched).toBe(false);
+    expect(innerResult.totalStatements).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Exact range ordering — columns beyond 100,000 must not invert specificity
+// ---------------------------------------------------------------------------
+
+describe("mapFileCoverage — exact range ordering (large columns)", () => {
+  it("columns beyond 100,000 preserve correct ownership (inner wins over outer)", () => {
+    // Outer at line 1-2, col 0-10. Inner at line 1-1, col 0-200001 (same line
+    // as outer's start, far larger column span but strictly contained in
+    // outer on the line axis: inner line range [1,1] ⊂ outer [1,2]).
+    // With the old numeric heuristic: outer size = (2-1)*100000 + 10 = 100010;
+    // inner size = (1-1)*100000 + 200001 = 200001. The heuristic would pick
+    // outer as "more specific" — WRONG, because inner [1,1] is a strict
+    // line-subset of outer [1,2]. Exact ordering must pick inner.
+    //
+    // A fnMap entry at line 1 col 0 to line 1 col 50 is contained in both.
+    // It must be assigned to inner (the true most-specific container).
+    const entry = makeFileEntry(
+      {
+        "0": {
+          name: "inner",
+          start: 1,
+          end: 1,
+          startCol: 0,
+          endCol: 50,
+        },
+      },
+      { "0": 1 },
+      "/abs/path/sample.ts",
+      { "0": { start: 1, end: 1, startCol: 0, endCol: 50 } },
+      { "0": 1 },
+    );
+    const outer = makeFunction(
+      "outer",
+      1,
+      2,
+      "/abs/path/sample.ts",
+      0,
+      10,
+    );
+    const inner = makeFunction(
+      "inner",
+      1,
+      1,
+      "/abs/path/sample.ts",
+      0,
+      200001,
+    );
+    const results = mapFileCoverage(entry, [outer, inner]);
+    const outerResult = results[0]!;
+    const innerResult = results[1]!;
+
+    // Inner is the true most-specific container (line range [1,1] ⊂ [1,2]).
+    // The fnMap entry and statement are assigned to inner.
+    expect(innerResult.matched).toBe(true);
+    expect(innerResult.totalStatements).toBe(1);
+    expect(innerResult.coveredStatements).toBe(1);
+    expect(innerResult.coverage).toBe(1);
+
+    // Outer has no assigned fnMap entry → unmatched.
+    expect(outerResult.matched).toBe(false);
+    expect(outerResult.totalStatements).toBe(0);
+  });
+
+  it("exact nested behavior: inner line-subset wins over outer with larger column span", () => {
+    // Outer at line 1-3, col 0-5. Inner at line 2-2, col 0-500000.
+    // Inner line range [2,2] ⊂ outer [1,3] → inner is more specific.
+    // Old heuristic: outer = 2*100000 + 5 = 200005; inner = 0 + 500000 = 500000
+    // → heuristic wrongly picks outer. Exact ordering picks inner.
+    const entry = makeFileEntry(
+      {
+        "0": {
+          name: "inner",
+          start: 2,
+          end: 2,
+          startCol: 0,
+          endCol: 10,
+        },
+      },
+      { "0": 1 },
+      "/abs/path/sample.ts",
+      { "0": { start: 2, end: 2, startCol: 0, endCol: 10 } },
+      { "0": 1 },
+    );
+    const outer = makeFunction("outer", 1, 3, "/abs/path/sample.ts", 0, 5);
+    const inner = makeFunction(
+      "inner",
+      2,
+      2,
+      "/abs/path/sample.ts",
+      0,
+      500000,
+    );
+    const results = mapFileCoverage(entry, [outer, inner]);
+    const outerResult = results[0]!;
+    const innerResult = results[1]!;
+
+    expect(innerResult.matched).toBe(true);
+    expect(innerResult.totalStatements).toBe(1);
+    expect(innerResult.coverage).toBe(1);
+
+    expect(outerResult.matched).toBe(false);
+    expect(outerResult.totalStatements).toBe(0);
+  });
+
+  it("same-line large columns: strictly-contained inner wins by column", () => {
+    // Both functions on line 1. Outer col 0-200000, inner col 50-100.
+    // Inner is a strict column-subset of outer on the same line → inner is
+    // more specific. A fnMap entry at col 60-80 is contained in both,
+    // assigned to inner.
+    const entry = makeFileEntry(
+      {
+        "0": {
+          name: "inner",
+          start: 1,
+          end: 1,
+          startCol: 60,
+          endCol: 80,
+        },
+      },
+      { "0": 1 },
+      "/abs/path/sample.ts",
+      { "0": { start: 1, end: 1, startCol: 60, endCol: 80 } },
+      { "0": 1 },
+    );
+    const outer = makeFunction(
+      "outer",
+      1,
+      1,
+      "/abs/path/sample.ts",
+      0,
+      200000,
+    );
+    const inner = makeFunction(
+      "inner",
+      1,
+      1,
+      "/abs/path/sample.ts",
+      50,
+      100,
+    );
+    const results = mapFileCoverage(entry, [outer, inner]);
+    const outerResult = results[0]!;
+    const innerResult = results[1]!;
+
+    expect(innerResult.matched).toBe(true);
+    expect(innerResult.totalStatements).toBe(1);
+    expect(innerResult.coverage).toBe(1);
+
+    expect(outerResult.matched).toBe(false);
+    expect(outerResult.totalStatements).toBe(0);
   });
 });
