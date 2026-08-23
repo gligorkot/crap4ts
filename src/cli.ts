@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DEFAULT_THRESHOLD, EXIT_INVALID_INPUT, EXIT_THRESHOLD_EXCEEDED } from "./crap.js";
 import { isConfigExcluded, loadConfig, thresholdForPath } from "./config.js";
 import { analyzeFiles, discoverSourceFiles } from "./complexity.js";
+import { assertNoDirtyTypeScriptFiles, changedFunctionFilter, collectChangedFiles } from "./changed.js";
 import { readCoverage, mapAllCoverage } from "./coverage.js";
 import { buildReport, renderHumanReport, renderJsonReport } from "./report.js";
 
@@ -13,6 +14,7 @@ interface CliArgs {
   readonly coverageFile: string;
   readonly threshold?: number;
   readonly configPath?: string;
+  readonly changedSince?: string;
   readonly json: boolean;
 }
 
@@ -24,6 +26,7 @@ function printUsage(stream: NodeJS.WriteStream): void {
     "  --coverage <file>     Path to Istanbul coverage-final.json (required)",
     "  --config <path>       Load exactly this TS, ESM (.mjs), CommonJS (.cjs), JS, or JSON config file",
     "  --threshold <number>  Override configured CRAP failure threshold",
+    "  --changed-since <ref> Analyze only functions changed since ref's merge base with HEAD",
     "  --json                Output JSON report instead of human-readable",
     "  --help                Show this help",
     "",
@@ -50,16 +53,18 @@ function parseArgs(argv: string[]): CliArgs {
   let coverageFile: string | undefined;
   let threshold: number | undefined;
   let configPath: string | undefined;
+  let changedSince: string | undefined;
   let json = false;
   const sourcePaths: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === undefined) continue;
     const value = args[index + 1];
-    if (arg === "--coverage" || arg === "--config" || arg === "--threshold") {
+    if (arg === "--coverage" || arg === "--config" || arg === "--threshold" || arg === "--changed-since") {
       if (value === undefined || value.startsWith("--")) invalid(`${arg} requires a value`);
       if (arg === "--coverage") coverageFile = value;
       else if (arg === "--config") configPath = value;
+      else if (arg === "--changed-since") changedSince = value;
       else {
         const parsed = Number(value);
         if (!Number.isFinite(parsed) || parsed < 0) invalid(`--threshold must be a non-negative number, got "${value}"`);
@@ -76,6 +81,7 @@ function parseArgs(argv: string[]): CliArgs {
     coverageFile,
     ...(threshold === undefined ? {} : { threshold }),
     ...(configPath === undefined ? {} : { configPath }),
+    ...(changedSince === undefined ? {} : { changedSince }),
     json,
   };
 }
@@ -105,6 +111,15 @@ async function main(): Promise<void> {
     : configSourcePaths(loaded?.config.src, projectRoot);
   if (sourcePaths.length === 0) invalid("no source paths provided and config has no src");
   const defaultThreshold = args.threshold ?? loaded?.config.threshold ?? DEFAULT_THRESHOLD;
+  const changedSince = args.changedSince ?? loaded?.config.changedSince;
+  const changed = changedSince === undefined ? undefined : collectChangedFiles(changedSince, cwd);
+  if (changed !== undefined) assertNoDirtyTypeScriptFiles(cwd);
+  const filter = changed === undefined ? undefined : {
+    mode: "changed" as const,
+    changedSince: changedSince!,
+    mergeBase: changed.mergeBase,
+    changedFileCount: changed.files.size,
+  };
 
   for (const root of sourcePaths) {
     if (!fs.existsSync(root)) {
@@ -119,6 +134,7 @@ async function main(): Promise<void> {
   }
 
   const files = discoverSourceFiles(sourcePaths, (filePath) => isConfigExcluded(filePath, projectRoot, loaded?.config));
+  const changedFiles = changed === undefined ? files : files.filter((filePath) => changed.files.has(filePath));
   if (files.length === 0) {
     writeEmptyResult(args.json, `No TypeScript source files found under: ${sourcePaths.join(", ")}`, defaultThreshold);
     process.exit(0);
@@ -130,16 +146,19 @@ async function main(): Promise<void> {
     process.stderr.write(`Error: ${(error as Error).message}\n`);
     process.exit(EXIT_INVALID_INPUT);
   }
-  const functions = analyzeFiles(files);
-  if (functions.length === 0) {
-    writeEmptyResult(args.json, "No functions found in source files.", defaultThreshold);
+  const functions = analyzeFiles(changedFiles);
+  const eligibleFunctions = changed === undefined ? functions : changedFunctionFilter(functions, changed.files);
+  if (eligibleFunctions.length === 0) {
+    const report = buildReport([], defaultThreshold, undefined, filter);
+    process.stdout.write((args.json ? renderJsonReport(report) : renderHumanReport(report)) + "\n");
     process.exit(0);
   }
-  const functionCoverage = mapAllCoverage(functions, coverage);
+  const functionCoverage = mapAllCoverage(eligibleFunctions, coverage);
   const report = buildReport(
     functionCoverage,
     defaultThreshold,
     (filePath) => thresholdForPath(filePath, projectRoot, loaded?.config, args.threshold),
+    filter,
   );
   process.stdout.write((args.json ? renderJsonReport(report) : renderHumanReport(report)) + "\n");
   if (report.summary.breached) {

@@ -86,6 +86,19 @@ export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner 
   return { mergeBase, files };
 }
 
+export function assertNoDirtyTypeScriptFiles(cwd: string): void {
+  const status = runRequiredGit(
+    runGit,
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    cwd,
+    "cannot inspect git worktree status",
+  );
+  const paths = status.split("\0").map((entry) => entry.length >= 4 ? entry.slice(3) : entry);
+  if (paths.some((filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"))) {
+    throw new GitInputError("changed-only analysis requires a clean TypeScript worktree; commit, stash, or discard TypeScript changes first");
+  }
+}
+
 /** Select functions in changed files whose inclusive source lines intersect changed line ranges. */
 export function changedFunctionFilter(
   functions: readonly FunctionInfo[],
