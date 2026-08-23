@@ -47,7 +47,7 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--coverage <file>` | Path to Istanbul `coverage-final.json` (Vitest V8 output). **Required.** | — |
-| `--config <path>` | Load exactly this JS, TS, or JSON configuration file. | auto-discovery |
+| `--config <path>` | Load exactly this TS, ESM (`.mjs`), CommonJS (`.cjs`), module-system-dependent JS (`.js`), or JSON configuration file. | auto-discovery |
 | `--threshold <number>` | Override every configured CRAP failure threshold; breach when score > threshold. | `8` |
 | `--json` | Output JSON report instead of human-readable table. | off |
 | `--help` | Print usage and exit. | — |
@@ -66,8 +66,10 @@ crap4ts discovers one configuration file from the project root (the current
 working directory), in this exact order:
 
 1. `crap4ts.config.ts`
-2. `crap4ts.config.js`
-3. `.crap4tsrc.json`
+2. `crap4ts.config.mjs`
+3. `crap4ts.config.cjs`
+4. `crap4ts.config.js`
+5. `.crap4tsrc.json`
 
 Use `--config <path>` to select exactly one file instead; it disables discovery.
 A selected or discovered config that is missing, unreadable, invalid, or has an
@@ -92,7 +94,7 @@ export default defineConfig({
 ```
 
 ```js
-// crap4ts.config.js
+// crap4ts.config.mjs — ESM in every project module system
 import { defineConfig } from "crap4ts";
 
 export default defineConfig({
@@ -102,30 +104,46 @@ export default defineConfig({
 });
 ```
 
+```js
+// crap4ts.config.cjs — CommonJS in every project module system
+module.exports = {
+  version: 1,
+  src: "src",
+  threshold: 8,
+};
+```
+
 JSON config has the same shape without `defineConfig`:
 
 ```json
 { "version": 1, "src": "src", "threshold": 8 }
 ```
 
-`src` and `exclude` accept a string or an array of strings. Config paths and
-globs are relative to the config file's directory. `exclude` uses a small,
-deterministic glob language: `*` matches within one path segment, `**` matches
-across segments, and `?` matches one non-separator character. The built-in
-exclusions for declaration files, `node_modules`, `dist`, `coverage`, and `.git`
-always apply in addition to config exclusions.
+`src` and `exclude` accept a string or an array of strings. `src` must contain
+at least one project-relative path and may not be absolute or escape the config
+file's directory; this keeps exclude and per-path threshold matching unambiguous.
+Config paths and globs are relative to the config file's directory. `exclude`
+uses a small, deterministic glob language: `*` matches within one path segment,
+`**` matches across segments, and `?` matches one non-separator character. The
+built-in exclusions for declaration files, `node_modules`, `dist`, `coverage`,
+and `.git` always apply in addition to config exclusions.
 
 For a function path, `--threshold` wins when supplied. Otherwise the most
-specific matching `thresholds` rule wins; specificity is the number of literal
-characters (then fewer wildcards), and an earlier rule wins an exact tie. If no
-rule matches, the config `threshold` applies; if it is absent the default is 8.
+specific matching `thresholds` rule wins; rules compare lexicographically by
+literal character count (more wins), wildcard count (fewer wins), then declaration
+order (earlier wins an exact tie). If no rule matches, the config `threshold`
+applies; if it is absent the default is 8.
 Each JSON report row and each human table row includes its applicable threshold,
 and the gate evaluates that row's CRAP score against that threshold.
 
 TypeScript and JavaScript configs execute local project code. Only run crap4ts
 against repositories whose configuration you trust. TypeScript config loading
-uses the package's TypeScript dependency at runtime, so the built `dist/cli.js`
-does not rely on a globally installed `tsx`.
+uses the package's TypeScript dependency at runtime and executes the transpiled
+module in memory with resolution rooted at the config file; the built `dist/cli.js`
+never writes generated files into the project. Use `.mjs` for portable ESM and
+`.cjs` for portable CommonJS. A `.js` config follows Node's normal module-system
+rules from the nearest `package.json` (`type: "module"` for ESM; otherwise
+CommonJS), so it is not a universal ESM form.
 
 ## Generating coverage for crap4ts
 

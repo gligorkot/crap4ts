@@ -5,14 +5,18 @@
  * code. Callers must only run crap4ts in repositories they trust.
  */
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import * as vm from "node:vm";
 import ts from "typescript";
 import { DEFAULT_THRESHOLD } from "./crap.js";
 
 export const CONFIG_VERSION = 1 as const;
 export const DISCOVERED_CONFIG_NAMES = [
   "crap4ts.config.ts",
+  "crap4ts.config.mjs",
+  "crap4ts.config.cjs",
   "crap4ts.config.js",
   ".crap4tsrc.json",
 ] as const;
@@ -81,11 +85,11 @@ export function thresholdForPath(
   if (cliThreshold !== undefined) return cliThreshold;
   if (config === undefined) return DEFAULT_THRESHOLD;
   let winner: PathThresholdRule | undefined;
-  let winnerSpecificity = Number.NEGATIVE_INFINITY;
+  let winnerSpecificity: PatternSpecificity | undefined;
   for (const rule of config.thresholds ?? []) {
     if (!matchesConfigPattern(filePath, projectRoot, rule.glob)) continue;
     const specificity = patternSpecificity(rule.glob);
-    if (specificity > winnerSpecificity) {
+    if (winnerSpecificity === undefined || isMoreSpecific(specificity, winnerSpecificity)) {
       winner = rule;
       winnerSpecificity = specificity;
     }
@@ -110,7 +114,7 @@ function validateConfig(value: unknown): Crap4tsConfig {
   if (value["version"] !== CONFIG_VERSION) {
     throw new Error(`config.version must be ${CONFIG_VERSION}`);
   }
-  const src = validateStringList(value["src"], "src");
+  const src = validateSourcePaths(value["src"]);
   const exclude = validateStringList(value["exclude"], "exclude");
   const threshold = validateThreshold(value["threshold"], "threshold");
   let thresholds: readonly PathThresholdRule[] | undefined;
@@ -146,6 +150,20 @@ function validateStringList(value: unknown, name: string): string | readonly str
   return typeof value === "string" ? value : Object.freeze([...entries]);
 }
 
+function validateSourcePaths(value: unknown): string | readonly string[] | undefined {
+  const src = validateStringList(value, "src");
+  if (src === undefined) return undefined;
+  const entries = typeof src === "string" ? [src] : src;
+  if (entries.length === 0) throw new Error("config.src must not be an empty array");
+  for (const entry of entries) {
+    const normalized = path.posix.normalize(toPosix(entry));
+    if (path.isAbsolute(entry) || path.win32.isAbsolute(entry) || path.posix.isAbsolute(normalized) || normalized === ".." || normalized.startsWith("../")) {
+      throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
+    }
+  }
+  return src;
+}
+
 function validateThreshold(value: unknown, name: string): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
@@ -175,7 +193,7 @@ async function readConfig(configPath: string): Promise<Crap4tsConfig> {
 async function importTranspiledTypeScript(configPath: string): Promise<Record<string, unknown>> {
   const source = fs.readFileSync(configPath, "utf8");
   const result = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
     fileName: configPath,
     reportDiagnostics: true,
   });
@@ -187,26 +205,39 @@ async function importTranspiledTypeScript(configPath: string): Promise<Record<st
       getNewLine: () => "\n",
     }));
   }
-  const temporaryPath = path.join(
-    path.dirname(configPath),
-    `.crap4ts-config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`,
-  );
-  try {
-    fs.writeFileSync(temporaryPath, result.outputText, { mode: 0o600 });
-    return await import(`${pathToFileURL(temporaryPath).href}?${Date.now()}`) as Record<string, unknown>;
-  } finally {
-    fs.rmSync(temporaryPath, { force: true });
-  }
+  const module = { exports: {} as Record<string, unknown> };
+  const execute = vm.runInThisContext(
+    `(function (exports, require, module, __filename, __dirname) { ${result.outputText}\n})`,
+    { filename: configPath },
+  ) as (
+    exports: Record<string, unknown>,
+    require: NodeJS.Require,
+    module: { exports: Record<string, unknown> },
+    filename: string,
+    dirname: string,
+  ) => void;
+  execute(module.exports, createRequire(configPath), module, configPath, path.dirname(configPath));
+  return module.exports;
 }
 
-function patternSpecificity(pattern: string): number {
+interface PatternSpecificity {
+  readonly literalCount: number;
+  readonly wildcardCount: number;
+}
+
+function patternSpecificity(pattern: string): PatternSpecificity {
   let literalCount = 0;
   let wildcardCount = 0;
   for (const character of toPosix(pattern)) {
     if (character === "*" || character === "?") wildcardCount++;
     else literalCount++;
   }
-  return literalCount * 100 - wildcardCount;
+  return { literalCount, wildcardCount };
+}
+
+function isMoreSpecific(candidate: PatternSpecificity, current: PatternSpecificity): boolean {
+  if (candidate.literalCount !== current.literalCount) return candidate.literalCount > current.literalCount;
+  return candidate.wildcardCount < current.wildcardCount;
 }
 
 function globToRegExp(pattern: string): RegExp {
