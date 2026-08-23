@@ -9,13 +9,14 @@
  * Each function is matched to an Istanbul `fnMap` entry by containment: the
  * coverage entry's `loc` line range must be fully within the function's
  * [startLine, endLine] range (the function declaration header often precedes
- * the first executable line, so the loc is a sub-range of the function). The
- * most specific (smallest) containing function wins. When two or more
- * functions of the same size both contain the loc, the match is ambiguous and
- * rejected. Coverage is then boolean: `count > 0` => covered (1), else
- * uncovered (0). Functions with no unambiguous matching entry report coverage
- * 0 (matched: false). This is **not** statement or branch coverage — it only
- * records whether a function was entered at least once.
+ * the first executable line, so the loc is a sub-range of the function). Among
+ * all locs contained within the function, the largest loc (the function's own
+ * body, not a nested function's loc) is chosen. When two or more locs tie for
+ * the largest size, the match is ambiguous and rejected. Coverage is then
+ * boolean: `count > 0` => covered (1), else uncovered (0). Functions with no
+ * unambiguous matching entry report coverage 0 (matched: false). This is
+ * **not** statement or branch coverage — it only records whether a function
+ * was entered at least once.
  *
  * @packageDocumentation
  */
@@ -248,18 +249,6 @@ export function mapAllCoverage(
   functions: FunctionInfo[],
   coverage: IstanbulCoverage,
 ): FunctionCoverage[] {
-  // Group functions by normalized file path for efficient lookup.
-  const byFile = new Map<string, FunctionInfo[]>();
-  for (const fn of functions) {
-    const norm = normalizeFilePath(fn.filePath);
-    let bucket = byFile.get(norm);
-    if (bucket === undefined) {
-      bucket = [];
-      byFile.set(norm, bucket);
-    }
-    bucket.push(fn);
-  }
-
   const results: FunctionCoverage[] = [];
   for (const fn of functions) {
     const fileEntry = findFileEntry(coverage, fn.filePath);
