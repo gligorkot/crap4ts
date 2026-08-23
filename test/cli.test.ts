@@ -88,6 +88,7 @@ describe("CLI integration", () => {
     const result = runCli(["--help"]);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Usage:");
+    expect(result.stdout).toContain("TS, ESM (.mjs), CommonJS (.cjs), JS, or JSON");
   });
 
   it("exits 1 when a source path does not exist", () => {

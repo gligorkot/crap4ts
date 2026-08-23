@@ -22,7 +22,7 @@ function printUsage(stream: NodeJS.WriteStream): void {
     "",
     "Options:",
     "  --coverage <file>     Path to Istanbul coverage-final.json (required)",
-    "  --config <path>       Load exactly this JS, TS, or JSON config file",
+    "  --config <path>       Load exactly this TS, ESM (.mjs), CommonJS (.cjs), JS, or JSON config file",
     "  --threshold <number>  Override configured CRAP failure threshold",
     "  --json                Output JSON report instead of human-readable",
     "  --help                Show this help",
