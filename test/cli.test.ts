@@ -51,6 +51,27 @@ describe("CLI integration", () => {
     expect(parsed.summary.breached).toBe(false);
   });
 
+  it("renders a Markdown table with --format markdown and exits 2 on breach", () => {
+    const result = runCli([FIXTURE, "--coverage", COVERAGE, "--format", "markdown", "--threshold", "8"]);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toContain("## CRAP Report");
+    expect(result.stdout).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+    expect(result.stderr).toContain("CRAP threshold exceeded");
+  });
+
+  it("supports --markdown as a compatibility alias for --format markdown", () => {
+    const result = runCli([FIXTURE, "--coverage", COVERAGE, "--markdown", "--threshold", "100"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("## CRAP Report");
+    expect(result.stdout).toContain("**Gate:** ✅ PASS");
+  });
+
+  it("rejects invalid --format values", () => {
+    const result = runCli([FIXTURE, "--coverage", COVERAGE, "--format", "html"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--format must be one of human, json, markdown");
+  });
+
   it("exits 0 when all scores are at or below threshold", () => {
     const result = runCli([FIXTURE, "--coverage", COVERAGE, "--threshold", "100"]);
     expect(result.code).toBe(0);
@@ -61,14 +82,14 @@ describe("CLI integration", () => {
     const result = runCli([FIXTURE]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("--coverage is required");
-    expect(result.stderr).not.toContain("at ");
+    expect(result.stderr).not.toMatch(/\n\s+at\s/);
   });
 
   it("exits 1 for invalid threshold value", () => {
     const result = runCli([FIXTURE, "--coverage", COVERAGE, "--threshold", "abc"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("non-negative number");
-    expect(result.stderr).not.toContain("at ");
+    expect(result.stderr).not.toMatch(/\n\s+at\s/);
   });
 
   it("exits 1 for unknown options", () => {
@@ -81,7 +102,7 @@ describe("CLI integration", () => {
     const result = runCli([FIXTURE, "--coverage", "/no/such/file.json"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Error:");
-    expect(result.stderr).not.toContain("at ");
+    expect(result.stderr).not.toMatch(/\n\s+at\s/);
   });
 
   it("exits 0 with --help", () => {
@@ -95,7 +116,7 @@ describe("CLI integration", () => {
     const result = runCli(["/nonexistent/path", "--coverage", COVERAGE, "--json"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Error:");
-    expect(result.stderr).not.toContain("at ");
+    expect(result.stderr).not.toMatch(/\n\s+at\s/);
   });
 
   it("exits 1 for empty source directory with missing --coverage path", () => {

@@ -38,6 +38,10 @@ npx crap4ts src --coverage coverage/coverage-final.json --threshold 8
 # JSON output for CI tooling
 npx crap4ts src --coverage coverage/coverage-final.json --json
 
+# Markdown table for a pull-request/job summary
+npx crap4ts src --coverage coverage/coverage-final.json --format markdown
+# --markdown is an alias for --format markdown
+
 # Multiple source paths
 npx crap4ts src lib --coverage coverage/coverage-final.json
 ```
@@ -50,7 +54,9 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | `--config <path>` | Load exactly this TS, ESM (`.mjs`), CommonJS (`.cjs`), module-system-dependent JS (`.js`), or JSON configuration file. | auto-discovery |
 | `--threshold <number>` | Override every configured CRAP failure threshold; breach when score > threshold. | `8` |
 | `--changed-since <git-ref>` | Gate only committed functions changed between `HEAD` and the merge base of this ref and `HEAD`. | off |
-| `--json` | Output JSON report instead of human-readable table. | off |
+| `--format <human\|json\|markdown>` | Select human-readable, JSON, or PR-friendly Markdown table output. | `human` |
+| `--markdown` | Alias for `--format markdown`. | off |
+| `--json` | Alias for `--format json`. | off |
 | `--help` | Print usage and exit. | — |
 
 ### Exit codes
@@ -60,6 +66,26 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | `0` | Success — no threshold breach. |
 | `1` | Invalid arguments or input (no stack trace). |
 | `2` | CRAP threshold exceeded. |
+
+## GitHub Action
+
+After your workflow has installed this package and generated Istanbul coverage, append
+its Markdown report to the job summary with the composite action:
+
+```yaml
+- run: npm ci
+- run: npm run coverage
+- uses: gligorkot/crap4ts@v1
+  with:
+    coverage: coverage/coverage-final.json
+    src: src
+    threshold: 8
+```
+
+The action does not install packages, generate coverage, upload artifacts, or comment
+on pull requests. It writes the Markdown report to `$GITHUB_STEP_SUMMARY` and exposes
+`breached-count`, `max-crap`, and `pass` (`"true"`/`"false"`) outputs. A threshold
+breach makes `pass` false but does not prevent the report or outputs from being written.
 
 ## Configuration
 

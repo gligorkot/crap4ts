@@ -1,0 +1,105 @@
+name: "crap4ts CRAP report"
+description: >
+  Renders a PR-friendly Markdown CRAP report from existing Istanbul/V8 coverage
+  into $GITHUB_STEP_SUMMARY and exposes breach outputs. Requires coverage to
+  already exist (e.g. produced by an earlier step); it does not install
+  dependencies or generate coverage itself.
+
+branding:
+  icon: "bar-chart-2"
+  color: "purple"
+
+inputs:
+  coverage:
+    description: "Path to the Istanbul coverage-final.json"
+    required: false
+    default: "coverage/coverage-final.json"
+  src:
+    description: "Source directory to analyze"
+    required: false
+    default: "src"
+  threshold:
+    description: "CRAP failure threshold"
+    required: false
+    default: "8"
+
+outputs:
+  breached-count:
+    description: "Number of functions whose CRAP exceeds the threshold"
+    value: ${{ steps.report.outputs.breached-count }}
+  max-crap:
+    description: "Maximum CRAP score across analyzed functions"
+    value: ${{ steps.report.outputs.max-crap }}
+  pass:
+    description: '"true" when no threshold was breached, otherwise "false"'
+    value: ${{ steps.report.outputs.pass }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: report
+      shell: bash
+      env:
+        COVERAGE_FILE: ${{ inputs.coverage }}
+        SOURCE_PATH: ${{ inputs.src }}
+        CRAP_THRESHOLD: ${{ inputs.threshold }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! -f "$COVERAGE_FILE" ]]; then
+          echo "::error::Coverage file not found: $COVERAGE_FILE. Generate coverage before calling this action."
+          exit 1
+        fi
+
+        # The caller owns its dependency installation. This action never installs
+        # packages or fetches code; it just renders an already-installed crap4ts.
+        if command -v crap4ts >/dev/null 2>&1; then
+          crap4ts=(crap4ts)
+        elif [[ -x ./node_modules/.bin/crap4ts ]]; then
+          crap4ts=(./node_modules/.bin/crap4ts)
+        else
+          echo "::error::crap4ts is not installed. Add it to your project first (e.g. npm i -D crap4ts); this action does not install dependencies."
+          exit 1
+        fi
+
+        json_file="$(mktemp)"
+        trap 'rm -f "$json_file"' EXIT
+
+        set +e
+        "${crap4ts[@]}" "$SOURCE_PATH" \
+          --coverage "$COVERAGE_FILE" \
+          --threshold "$CRAP_THRESHOLD" \
+          --format json > "$json_file" 2>/dev/null
+        status=$?
+        set -e
+
+        # Exit code 2 means the threshold was breached — expected here.
+        if [[ "$status" -ne 0 && "$status" -ne 2 ]]; then
+          echo "::error::crap4ts failed with exit code $status"
+          exit "$status"
+        fi
+
+        breached=$(node -e '
+          const report = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+          console.log(String(report.summary.breachedCount));
+        ' "$json_file")
+        max_crap=$(node -e '
+          const report = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+          console.log(report.summary.maxCrap.toFixed(1));
+        ' "$json_file")
+        pass=$([[ "$breached" == "0" ]] && echo true || echo false)
+
+        {
+          "${crap4ts[@]}" "$SOURCE_PATH" \
+            --coverage "$COVERAGE_FILE" \
+            --threshold "$CRAP_THRESHOLD" \
+            --format markdown 2>/dev/null || true
+          echo
+          echo "> Gate: $([[ "$pass" == "true" ]] && echo "✅ PASS" || echo "❌ FAIL") — breached: $breached, max CRAP: $max_crap"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        {
+          echo "breached-count=$breached"
+          echo "max-crap=$max_crap"
+          echo "pass=$pass"
+        } >> "$GITHUB_OUTPUT"

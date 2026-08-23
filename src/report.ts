@@ -208,3 +208,53 @@ function shortenPath(filePath: string): string {
 export function renderJsonReport(report: CrapReport): string {
   return JSON.stringify(report, null, 2);
 }
+
+function escapeCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
+/**
+ * Render a PR-friendly Markdown report with a proper table.
+ */
+export function renderMarkdownReport(report: CrapReport): string {
+  const lines: string[] = [];
+  lines.push("## CRAP Report");
+  lines.push("");
+  if (report.filter !== undefined) {
+    lines.push(`Changed-only mode: since \`${report.filter.changedSince}\` (merge base \`${report.filter.mergeBase}\`, ${report.filter.changedFileCount} changed file(s))`);
+    lines.push("");
+  }
+
+  if (report.rows.length === 0) {
+    lines.push(report.filter === undefined ? "No functions found." : "No eligible changed functions found.");
+    lines.push("");
+    lines.push(`**Threshold:** ${report.summary.threshold} · **Breached:** ${report.summary.breached ? "YES" : "no"}`);
+    return lines.join("\n");
+  }
+
+  lines.push("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of report.rows) {
+    const breach = row.crap > row.threshold;
+    const name = breach ? `⚠️ ${escapeCell(row.displayName)}` : escapeCell(row.displayName);
+    const coverage = `${(row.coverage * 100).toFixed(1)}%`;
+    lines.push(
+      `| ${name} ` +
+      `| ${escapeCell(shortenPath(row.filePath))} ` +
+      `| ${row.startLine} ` +
+      `| ${row.complexity} ` +
+      `| ${coverage} ` +
+      `| ${row.threshold.toFixed(1)} ` +
+      `| ${row.crap.toFixed(1)} |`,
+    );
+  }
+
+  lines.push("");
+  const gate = report.summary.breached ? "❌ FAIL" : "✅ PASS";
+  lines.push(
+    `**Threshold:** ${report.summary.threshold} · **Functions:** ${report.summary.totalFunctions}` +
+    ` · **Max CRAP:** ${report.summary.maxCrap.toFixed(1)}` +
+    ` · **Breached:** ${report.summary.breachedCount} function(s) · **Gate:** ${gate}`,
+  );
+  return lines.join("\n");
+}
