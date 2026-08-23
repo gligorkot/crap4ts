@@ -5,11 +5,14 @@
  * Vitest's V8 provider, which converts V8 raw coverage to Istanbul) and maps
  * each analyzed function to a coverage decimal in [0, 1].
  *
- * Mapping strategy: each Istanbul `fnMap` entry carries a `decl` (declaration
- * name span) and `loc` (body span) with 1-based line/column coordinates. For
- * every {@link FunctionInfo} we find the coverage entry whose `loc` line
- * range best overlaps the function's line range. Functions with no matching
- * coverage entry report coverage 0 (they never disappear), per the v1 spec.
+ * v1 coverage semantics — **executed / not-executed function hit coverage**:
+ * Each function is matched to an Istanbul `fnMap` entry by containment: the
+ * function's [startLine, endLine] range must be fully within the entry's `loc`
+ * line range, and exactly one entry must contain it (ambiguous matches are
+ * rejected). Coverage is then boolean: `count > 0` => covered (1), else
+ * uncovered (0). Functions with no unambiguous matching entry report coverage
+ * 0 (matched: false). This is **not** statement or branch coverage — it only
+ * records whether a function was entered at least once.
  *
  * @packageDocumentation
  */
@@ -94,8 +97,11 @@ function normalizeFilePath(p: string): string {
 /**
  * Find the Istanbul file entry whose `path` matches `sourcePath`.
  *
- * Matching tries, in order: exact normalized match, then suffix match on path
- * segments (handles absolute-vs-relative mismatches common in coverage reports).
+ * Matching tries, in order: exact normalized match, then unambiguous suffix
+ * match on path segments (handles absolute-vs-relative mismatches common in
+ * coverage reports). A suffix match is only accepted when exactly one coverage
+ * entry shares that suffix — if two or more entries match the same suffix,
+ * the match is ambiguous and rejected (returns null).
  */
 function findFileEntry(
   coverage: IstanbulCoverage,
@@ -116,9 +122,9 @@ function findFileEntry(
       return entry;
     }
   }
-  // Suffix match on segments.
+  // Suffix match on segments — only accept an unambiguous match.
   const targetSegs = target.split(path.sep).filter((s) => s.length > 0);
-  let best: IstanbulFileEntry | null = null;
+  const candidates: IstanbulFileEntry[] = [];
   let bestScore = 0;
   for (const key of keys) {
     const entry = coverage[key];
@@ -130,10 +136,17 @@ function findFileEntry(
     const score = commonSuffixSegments(targetSegs, candSegs);
     if (score > bestScore) {
       bestScore = score;
-      best = entry;
+      candidates.length = 0;
+      candidates.push(entry);
+    } else if (score === bestScore && score > 0) {
+      candidates.push(entry);
     }
   }
-  return bestScore > 0 ? best : null;
+  // Only accept the suffix match when exactly one candidate has the best score.
+  if (candidates.length === 1 && bestScore > 0) {
+    return candidates[0]!;
+  }
+  return null;
 }
 
 function commonSuffixSegments(a: string[], b: string[]): number {
@@ -149,61 +162,52 @@ function commonSuffixSegments(a: string[], b: string[]): number {
 }
 
 /**
- * Compute the line overlap between a function's range and a coverage entry's
- * `loc` range. Returns the number of overlapping lines (0 = no overlap).
- */
-function lineOverlap(
-  fnStart: number,
-  fnEnd: number,
-  locStart: number,
-  locEnd: number,
-): number {
-  const overlapStart = Math.max(fnStart, locStart);
-  const overlapEnd = Math.min(fnEnd, locEnd);
-  if (overlapEnd < overlapStart) {
-    return 0;
-  }
-  return overlapEnd - overlapStart + 1;
-}
-
-/**
- * Map a single function to its coverage entry.
+ * Map a single function to its coverage entry using containment-only matching.
  *
- * Finds the coverage entry in `fileEntry` whose `loc` line range best overlaps
- * the function's [startLine, endLine] range. When no entry overlaps, returns
- * coverage 0 with `matched: false`.
+ * The function's [startLine, endLine] range must be **fully contained** within
+ * a coverage entry's `loc` line range (loc.start.line <= fn.startLine AND
+ * loc.end.line >= fn.endLine). Partial overlaps are NOT sufficient, because a
+ * partial overlap cannot determine whether the coverage entry describes this
+ * function or a neighbouring one.
+ *
+ * When exactly one entry contains the function, that entry is used. When zero
+ * entries contain the function, returns coverage 0 with `matched: false`. When
+ * two or more entries contain the function (ambiguous), returns `matched:
+ * false` — we cannot safely determine which entry applies, so we report
+ * "not executed" rather than guessing.
  */
 export function mapFunctionCoverage(
   fileEntry: IstanbulFileEntry,
   fn: FunctionInfo,
 ): FunctionCoverage {
   let bestKey: string | null = null;
-  let bestOverlap = 0;
   let bestCount = 0;
+  let matchCount = 0;
 
   for (const key of Object.keys(fileEntry.fnMap)) {
     const entry = fileEntry.fnMap[key];
     if (entry === undefined) {
       continue;
     }
-    const overlap = lineOverlap(
-      fn.startLine,
-      fn.endLine,
-      entry.loc.start.line,
-      entry.loc.end.line,
-    );
     const count = fileEntry.f[key];
     if (count === undefined) {
       continue;
     }
-    if (overlap > bestOverlap) {
-      bestOverlap = overlap;
+    // Containment check: the function's line range must be fully within the
+    // coverage loc's line range.
+    if (
+      entry.loc.start.line <= fn.startLine &&
+      entry.loc.end.line >= fn.endLine
+    ) {
+      matchCount++;
       bestKey = key;
       bestCount = count;
     }
   }
 
-  if (bestKey === null) {
+  // Ambiguous: two or more entries contain this function's range. We cannot
+  // safely determine which coverage entry applies, so report unmatched.
+  if (matchCount !== 1) {
     return {
       functionInfo: fn,
       coverage: 0,

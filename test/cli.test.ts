@@ -2,13 +2,20 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 
-const CLI = path.resolve(__dirname, "../dist/cli.js");
 const FIXTURE = path.resolve(__dirname, "fixtures/sample.ts");
 const COVERAGE = path.resolve(__dirname, "fixtures/coverage-sample.json");
 
+/**
+ * Run the CLI from source TypeScript via tsx, so tests do not depend on a
+ * pre-existing dist/ build artefact.
+ *
+ * We invoke `npx tsx src/cli.ts` so a freshly cloned checkout with `npm ci`
+ * can run the full suite without `npm run build`.
+ */
 function runCli(args: string[]): { stdout: string; stderr: string; code: number } {
+  const src = path.resolve(__dirname, "../src/cli.ts");
   try {
-    const stdout = execFileSync(process.execPath, [CLI, ...args], {
+    const stdout = execFileSync("npx", ["tsx", src, ...args], {
       encoding: "utf8",
       timeout: 15000,
       stdio: ["pipe", "pipe", "pipe"],
@@ -82,11 +89,10 @@ describe("CLI integration", () => {
     expect(result.stdout).toContain("Usage:");
   });
 
-  it("exits 0 when no source files found", () => {
+  it("exits 1 when a source path does not exist", () => {
     const result = runCli(["/nonexistent/path", "--coverage", COVERAGE, "--json"]);
-    expect(result.code).toBe(0);
-    const parsed = JSON.parse(result.stdout);
-    expect(parsed.rows).toEqual([]);
-    expect(parsed.summary.totalFunctions).toBe(0);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Error:");
+    expect(result.stderr).not.toContain("at ");
   });
 });

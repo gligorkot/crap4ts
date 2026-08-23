@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   DEFAULT_THRESHOLD,
@@ -127,6 +128,16 @@ function parseArgs(argv: string[]): CliArgs {
 
 function main(): void {
   const args = parseArgs(process.argv);
+
+  // Fail early when any source path does not exist on disk. This distinguishes
+  // an explicit misspelled/nonexistent path (invalid input, exit 1) from a valid
+  // directory that simply contains no analyzable source files (exit 0).
+  for (const root of args.sourcePaths) {
+    if (!fs.existsSync(path.resolve(root))) {
+      process.stderr.write(`Error: source path does not exist: ${root}\n`);
+      process.exit(EXIT_INVALID_INPUT);
+    }
+  }
 
   // Discover source files from the given paths.
   const files = discoverSourceFiles(args.sourcePaths);
