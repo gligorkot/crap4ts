@@ -139,6 +139,16 @@ function main(): void {
     }
   }
 
+  // Validate coverage file existence BEFORE checking for empty source results.
+  // An empty source directory combined with a missing coverage path must exit 1
+  // (invalid input), not 0 (empty-result success). Coverage is a required input;
+  // its absence is always an error regardless of source content.
+  const coverageFilePath = args.coverageFile;
+  if (!fs.existsSync(path.resolve(coverageFilePath))) {
+    process.stderr.write(`Error: coverage file does not exist: ${coverageFilePath}\n`);
+    process.exit(EXIT_INVALID_INPUT);
+  }
+
   // Discover source files from the given paths.
   const files = discoverSourceFiles(args.sourcePaths);
   if (files.length === 0) {
@@ -167,7 +177,6 @@ function main(): void {
   }
 
   // Read coverage.
-  const coverageFilePath = args.coverageFile;
   let coverage;
   try {
     coverage = readCoverage(coverageFilePath);
