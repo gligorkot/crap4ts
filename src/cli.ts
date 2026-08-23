@@ -1,244 +1,155 @@
 #!/usr/bin/env node
-/**
- * crap4ts CLI entry point.
- *
- * Usage:
- *   crap4ts <source-paths...> --coverage <file> [--threshold <n>] [--json]
- *
- * Exit codes:
- *   0  success, no threshold breach
- *   1  invalid arguments or input
- *   2  CRAP threshold exceeded
- *
- * @packageDocumentation
- */
-
+/** crap4ts CLI entry point. */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  DEFAULT_THRESHOLD,
-  EXIT_INVALID_INPUT,
-  EXIT_THRESHOLD_EXCEEDED,
-} from "./crap.js";
+import { DEFAULT_THRESHOLD, EXIT_INVALID_INPUT, EXIT_THRESHOLD_EXCEEDED } from "./crap.js";
+import { isConfigExcluded, loadConfig, thresholdForPath } from "./config.js";
 import { analyzeFiles, discoverSourceFiles } from "./complexity.js";
 import { readCoverage, mapAllCoverage } from "./coverage.js";
 import { buildReport, renderHumanReport, renderJsonReport } from "./report.js";
 
 interface CliArgs {
-  sourcePaths: string[];
-  coverageFile: string;
-  threshold: number;
-  json: boolean;
+  readonly sourcePaths: string[];
+  readonly coverageFile: string;
+  readonly threshold?: number;
+  readonly configPath?: string;
+  readonly json: boolean;
 }
 
-/** Print usage text to the given stream. */
 function printUsage(stream: NodeJS.WriteStream): void {
-  stream.write(
-    [
-      "Usage: crap4ts <source-paths...> --coverage <file> [options]",
-      "",
-      "Options:",
-      "  --coverage <file>     Path to Istanbul coverage-final.json (required)",
-      "  --threshold <number>  CRAP failure threshold (default: 8)",
-      "  --json                Output JSON report instead of human-readable",
-      "  --help                Show this help",
-      "",
-      "Exit codes:",
-      "  0  success, no threshold breach",
-      "  1  invalid arguments or input",
-      "  2  CRAP threshold exceeded",
-      "",
-    ].join("\n"),
-  );
+  stream.write([
+    "Usage: crap4ts [source-paths...] --coverage <file> [options]",
+    "",
+    "Options:",
+    "  --coverage <file>     Path to Istanbul coverage-final.json (required)",
+    "  --config <path>       Load exactly this JS, TS, or JSON config file",
+    "  --threshold <number>  Override configured CRAP failure threshold",
+    "  --json                Output JSON report instead of human-readable",
+    "  --help                Show this help",
+    "",
+    "Exit codes:",
+    "  0  success, no threshold breach",
+    "  1  invalid arguments or input",
+    "  2  CRAP threshold exceeded",
+    "",
+  ].join("\n"));
 }
 
-/** Parse and validate CLI arguments. Returns args or exits with code 1. */
-function parseArgs(argv: string[]): CliArgs {
-  const args = argv.slice(2); // skip node + script path
-  if (args.length === 0) {
-    process.stderr.write("Error: no arguments provided\n");
-    printUsage(process.stderr);
-    process.exit(EXIT_INVALID_INPUT);
-  }
+function invalid(message: string): never {
+  process.stderr.write(`Error: ${message}\n`);
+  printUsage(process.stderr);
+  process.exit(EXIT_INVALID_INPUT);
+}
 
+function parseArgs(argv: string[]): CliArgs {
+  const args = argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     printUsage(process.stdout);
     process.exit(0);
   }
-
   let coverageFile: string | undefined;
-  let threshold = DEFAULT_THRESHOLD;
+  let threshold: number | undefined;
+  let configPath: string | undefined;
   let json = false;
   const sourcePaths: string[] = [];
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === undefined) break;
-    if (arg === "--coverage") {
-      const val = args[i + 1];
-      if (val === undefined || val.startsWith("--")) {
-        process.stderr.write("Error: --coverage requires a file path\n");
-        printUsage(process.stderr);
-        process.exit(EXIT_INVALID_INPUT);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+    const value = args[index + 1];
+    if (arg === "--coverage" || arg === "--config" || arg === "--threshold") {
+      if (value === undefined || value.startsWith("--")) invalid(`${arg} requires a value`);
+      if (arg === "--coverage") coverageFile = value;
+      else if (arg === "--config") configPath = value;
+      else {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) invalid(`--threshold must be a non-negative number, got "${value}"`);
+        threshold = parsed;
       }
-      coverageFile = val;
-      i++;
-    } else if (arg === "--threshold") {
-      const val = args[i + 1];
-      if (val === undefined || val.startsWith("--")) {
-        process.stderr.write("Error: --threshold requires a number\n");
-        printUsage(process.stderr);
-        process.exit(EXIT_INVALID_INPUT);
-      }
-      const parsed = Number(val);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        process.stderr.write(
-          `Error: --threshold must be a non-negative number, got "${val}"\n`,
-        );
-        printUsage(process.stderr);
-        process.exit(EXIT_INVALID_INPUT);
-      }
-      threshold = parsed;
-      i++;
-    } else if (arg === "--json") {
-      json = true;
-    } else if (arg.startsWith("--")) {
-      process.stderr.write(`Error: unknown option "${arg}"\n`);
-      printUsage(process.stderr);
-      process.exit(EXIT_INVALID_INPUT);
-    } else {
-      sourcePaths.push(arg);
-    }
+      index++;
+    } else if (arg === "--json") json = true;
+    else if (arg.startsWith("--")) invalid(`unknown option "${arg}"`);
+    else sourcePaths.push(arg);
   }
-
-  if (sourcePaths.length === 0) {
-    process.stderr.write("Error: no source paths provided\n");
-    printUsage(process.stderr);
-    process.exit(EXIT_INVALID_INPUT);
-  }
-
-  if (coverageFile === undefined) {
-    process.stderr.write("Error: --coverage is required\n");
-    printUsage(process.stderr);
-    process.exit(EXIT_INVALID_INPUT);
-  }
-
-  return { sourcePaths, coverageFile, threshold, json };
+  if (coverageFile === undefined) invalid("--coverage is required");
+  return {
+    sourcePaths,
+    coverageFile,
+    ...(threshold === undefined ? {} : { threshold }),
+    ...(configPath === undefined ? {} : { configPath }),
+    json,
+  };
 }
 
-function main(): void {
-  const args = parseArgs(process.argv);
+function configSourcePaths(src: string | readonly string[] | undefined, projectRoot: string): string[] {
+  if (src === undefined) return [];
+  const paths = typeof src === "string" ? [src] : src;
+  return paths.map((entry) => path.resolve(projectRoot, entry));
+}
 
-  // Fail early when any source path does not exist on disk. This distinguishes
-  // an explicit misspelled/nonexistent path (invalid input, exit 1) from a valid
-  // directory that simply contains no analyzable source files (exit 0).
-  for (const root of args.sourcePaths) {
-    if (!fs.existsSync(path.resolve(root))) {
+function writeEmptyResult(json: boolean, message: string, threshold: number): void {
+  if (json) {
+    process.stdout.write(JSON.stringify({
+      rows: [],
+      summary: { totalFunctions: 0, breachedCount: 0, maxCrap: 0, threshold, breached: false },
+    }, null, 2) + "\n");
+  } else process.stdout.write(`${message}\n`);
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv);
+  const cwd = process.cwd();
+  const loaded = await loadConfig(cwd, args.configPath);
+  const projectRoot = loaded?.projectRoot ?? cwd;
+  const sourcePaths = args.sourcePaths.length > 0
+    ? args.sourcePaths.map((entry) => path.resolve(cwd, entry))
+    : configSourcePaths(loaded?.config.src, projectRoot);
+  if (sourcePaths.length === 0) invalid("no source paths provided and config has no src");
+  const defaultThreshold = args.threshold ?? loaded?.config.threshold ?? DEFAULT_THRESHOLD;
+
+  for (const root of sourcePaths) {
+    if (!fs.existsSync(root)) {
       process.stderr.write(`Error: source path does not exist: ${root}\n`);
       process.exit(EXIT_INVALID_INPUT);
     }
   }
-
-  // Validate coverage file existence BEFORE checking for empty source results.
-  // An empty source directory combined with a missing coverage path must exit 1
-  // (invalid input), not 0 (empty-result success). Coverage is a required input;
-  // its absence is always an error regardless of source content.
-  const coverageFilePath = args.coverageFile;
-  if (!fs.existsSync(path.resolve(coverageFilePath))) {
-    process.stderr.write(`Error: coverage file does not exist: ${coverageFilePath}\n`);
+  const coverageFilePath = path.resolve(cwd, args.coverageFile);
+  if (!fs.existsSync(coverageFilePath)) {
+    process.stderr.write(`Error: coverage file does not exist: ${args.coverageFile}\n`);
     process.exit(EXIT_INVALID_INPUT);
   }
 
-  // Discover source files from the given paths.
-  const files = discoverSourceFiles(args.sourcePaths);
+  const files = discoverSourceFiles(sourcePaths, (filePath) => isConfigExcluded(filePath, projectRoot, loaded?.config));
   if (files.length === 0) {
-    const msg = `No TypeScript source files found under: ${args.sourcePaths.join(", ")}`;
-    if (args.json) {
-      process.stdout.write(
-        JSON.stringify(
-          {
-            rows: [],
-            summary: {
-              totalFunctions: 0,
-              breachedCount: 0,
-              maxCrap: 0,
-              threshold: args.threshold,
-              breached: false,
-            },
-          },
-          null,
-          2,
-        ) + "\n",
-      );
-    } else {
-      process.stdout.write(msg + "\n");
-    }
+    writeEmptyResult(args.json, `No TypeScript source files found under: ${sourcePaths.join(", ")}`, defaultThreshold);
     process.exit(0);
   }
-
-  // Read coverage.
   let coverage;
   try {
     coverage = readCoverage(coverageFilePath);
-  } catch (e) {
-    process.stderr.write(`Error: ${(e as Error).message}\n`);
+  } catch (error) {
+    process.stderr.write(`Error: ${(error as Error).message}\n`);
     process.exit(EXIT_INVALID_INPUT);
   }
-
-  // Analyze functions.
   const functions = analyzeFiles(files);
   if (functions.length === 0) {
-    const msg = "No functions found in source files.";
-    if (args.json) {
-      process.stdout.write(
-        JSON.stringify(
-          {
-            rows: [],
-            summary: {
-              totalFunctions: 0,
-              breachedCount: 0,
-              maxCrap: 0,
-              threshold: args.threshold,
-              breached: false,
-            },
-          },
-          null,
-          2,
-        ) + "\n",
-      );
-    } else {
-      process.stdout.write(msg + "\n");
-    }
+    writeEmptyResult(args.json, "No functions found in source files.", defaultThreshold);
     process.exit(0);
   }
-
-  // Map coverage.
   const functionCoverage = mapAllCoverage(functions, coverage);
-
-  // Build report.
-  const report = buildReport(functionCoverage, args.threshold);
-
-  // Output.
-  if (args.json) {
-    process.stdout.write(renderJsonReport(report) + "\n");
-  } else {
-    process.stdout.write(renderHumanReport(report) + "\n");
-  }
-
-  // Exit code based on threshold.
+  const report = buildReport(
+    functionCoverage,
+    defaultThreshold,
+    (filePath) => thresholdForPath(filePath, projectRoot, loaded?.config, args.threshold),
+  );
+  process.stdout.write((args.json ? renderJsonReport(report) : renderHumanReport(report)) + "\n");
   if (report.summary.breached) {
-    process.stderr.write(
-      `CRAP threshold exceeded: ${report.summary.maxCrap.toFixed(1)} > ${args.threshold}\n`,
-    );
+    const breach = report.rows.find((row) => row.crap > row.threshold);
+    if (breach !== undefined) process.stderr.write(`CRAP threshold exceeded: ${breach.crap.toFixed(1)} > ${breach.threshold}\n`);
     process.exit(EXIT_THRESHOLD_EXCEEDED);
   }
-  process.exit(0);
 }
 
-try {
-  main();
-} catch (e) {
-  // No stack trace by default; just the message.
-  process.stderr.write(`Error: ${(e as Error).message}\n`);
+main().catch((error: unknown) => {
+  process.stderr.write(`Error: ${(error as Error).message}\n`);
   process.exit(EXIT_INVALID_INPUT);
-}
+});

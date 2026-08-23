@@ -25,6 +25,7 @@ export interface ReportRow {
   readonly coverageMatched: boolean;
   readonly totalStatements: number;
   readonly coveredStatements: number;
+  readonly threshold: number;
 }
 
 /**
@@ -46,6 +47,7 @@ export interface CrapReport {
  */
 export function buildReportRows(
   coverage: FunctionCoverage[],
+  thresholdForPath: (filePath: string) => number = () => 8,
 ): ReportRow[] {
   const rows: ReportRow[] = [];
   for (const fc of coverage) {
@@ -63,6 +65,7 @@ export function buildReportRows(
       coverageMatched: fc.matched,
       totalStatements: fc.totalStatements,
       coveredStatements: fc.coveredStatements,
+      threshold: thresholdForPath(fn.filePath),
     });
   }
   return rows;
@@ -86,15 +89,16 @@ export function sortRows(rows: ReportRow[]): ReportRow[] {
 export function buildReport(
   coverage: FunctionCoverage[],
   threshold: number,
+  thresholdForPath: (filePath: string) => number = () => threshold,
 ): CrapReport {
-  const sorted = sortRows(buildReportRows(coverage));
+  const sorted = sortRows(buildReportRows(coverage, thresholdForPath));
   let maxCrap = 0;
   let breachedCount = 0;
   for (const row of sorted) {
     if (row.crap > maxCrap) {
       maxCrap = row.crap;
     }
-    if (row.crap > threshold) {
+    if (row.crap > row.threshold) {
       breachedCount++;
     }
   }
@@ -105,7 +109,7 @@ export function buildReport(
       breachedCount,
       maxCrap,
       threshold,
-      breached: maxCrap > threshold,
+      breached: breachedCount > 0,
     },
   };
 }
@@ -142,12 +146,13 @@ export function renderHumanReport(report: CrapReport): string {
     `${"Line".padStart(5)}  ` +
     `${"CC".padStart(4)}  ` +
     `${"Cov".padStart(7)}  ` +
+    `${"Threshold".padStart(9)}  ` +
     `${"CRAP".padStart(8)}`;
   lines.push(header);
   lines.push("-".repeat(header.length));
 
   for (const row of report.rows) {
-    const breach = row.crap > report.summary.threshold;
+    const breach = row.crap > row.threshold;
     const marker = breach ? "!" : " ";
     const line =
       `${(marker + row.displayName).padEnd(nameW)}  ` +
@@ -155,6 +160,7 @@ export function renderHumanReport(report: CrapReport): string {
       `${String(row.startLine).padStart(5)}  ` +
       `${String(row.complexity).padStart(4)}  ` +
       `${formatPct(row.coverage).padStart(7)}  ` +
+      `${row.threshold.toFixed(1).padStart(9)}  ` +
       `${row.crap.toFixed(1).padStart(8)}`;
     lines.push(line);
   }
@@ -169,7 +175,7 @@ export function renderHumanReport(report: CrapReport): string {
   if (report.summary.breached) {
     lines.push("");
     lines.push(
-      `CRAP threshold exceeded: ${report.summary.maxCrap.toFixed(1)} > ${report.summary.threshold}`,
+      "CRAP threshold exceeded; see applicable row thresholds above.",
     );
   }
   return lines.join("\n");
