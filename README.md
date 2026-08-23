@@ -83,9 +83,15 @@ its Markdown report to the job summary with the composite action:
 ```
 
 The action does not install packages, generate coverage, upload artifacts, or comment
-on pull requests. It writes the Markdown report to `$GITHUB_STEP_SUMMARY` and exposes
-`breached-count`, `max-crap`, and `pass` (`"true"`/`"false"`) outputs. A threshold
-breach makes `pass` false but does not prevent the report or outputs from being written.
+on pull requests. It runs a self-contained bundled CLI committed in this repository
+under `action/` (`$GITHUB_ACTION_PATH/action/action.cjs`, regenerated deterministically
+with `npm run build:action`), so no caller-side dependency, PATH lookup, npm/npx, or
+runtime fetch is needed. It writes the Markdown report to
+`$GITHUB_STEP_SUMMARY` and exposes `breached-count`, `max-crap`, and `pass`
+(`"true"`/`"false"`) outputs. Exit codes: `0` on pass, `2` when the threshold is
+breached (outputs and summary are written first either way); any other non-zero exit
+propagates unchanged. Dynamic function names and file paths are rendered as escaped
+literal code spans so they cannot inject Markdown or HTML into the summary.
 
 ## Configuration
 

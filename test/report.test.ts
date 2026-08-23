@@ -148,7 +148,7 @@ describe("renderMarkdownReport", () => {
   it("marks breached rows with a warning emoji", () => {
     const report = buildReport([makeFn("bad", 4, 1, 1, 0)], 8);
     const text = renderMarkdownReport(report);
-    expect(text).toContain("⚠️ bad");
+    expect(text).toContain("⚠️ `bad`");
   });
 
   it("renders a pass gate when nothing breaches", () => {

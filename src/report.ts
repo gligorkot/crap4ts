@@ -209,8 +209,24 @@ export function renderJsonReport(report: CrapReport): string {
   return JSON.stringify(report, null, 2);
 }
 
-function escapeCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\n/g, " ");
+/**
+ * Render dynamic content (function names, file paths) as literal Markdown
+ * text so it cannot form links, HTML, emphasis, or table structure:
+ *
+ * - backslash-escape every ASCII punctuation character, which neutralizes
+ *   pipes (table cells), brackets/parentheses (links), asterisks/underscores
+ *   (emphasis), and code delimiters;
+ * - replace CR/LF with spaces so a name can never start a new line/block
+ *   (e.g. inject an HTML block or heading);
+ * - wrap in backticks after stripping any embedded backtick-like sequences,
+ *   which makes GitHub render the remainder as inline code — no raw HTML.
+ */
+export function escapeCell(value: string): string {
+  // Remove control characters (including CR/LF/TAB) entirely.
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  // Escape all ASCII punctuation so it cannot act as Markdown syntax.
+  const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
+  return `\`${escaped}\``;
 }
 
 /**
