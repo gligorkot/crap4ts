@@ -34,6 +34,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  formatSelfScoreAudit,
   validateSelfScoreBreach,
   EXPECTED_BREACH_NAMES,
 } from "../src/self-score-helpers.js";
@@ -119,9 +120,8 @@ function assertExpectedBreach(): void {
       process.exit(1);
     }
 
-    console.log(
-      `Self-score OK: expected threshold breach confirmed (max CRAP ${parsed.summary.maxCrap?.toFixed(1)} > ${THRESHOLD}).`,
-    );
+    console.log("Self-score OK: expected threshold breach confirmed.");
+    console.log(formatSelfScoreAudit(parsed));
     console.log(
       "The breach is expected: cli.ts functions (parseArgs, main) have high cyclomatic complexity and no direct test coverage (they are exercised via subprocess, which V8 does not attribute to the source file). Coverage fraction semantics: these functions report coverage 0 because no statements within their source range were executed.",
     );

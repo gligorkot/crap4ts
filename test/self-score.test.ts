@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatSelfScoreAudit,
   validateSelfScoreBreach,
   EXPECTED_BREACH_NAMES,
 } from "../src/self-score-helpers.js";
@@ -23,10 +24,40 @@ function makeRow(
     coverageMatched: matched,
     totalStatements: coverage > 0 ? 1 : 0,
     coveredStatements: coverage > 0 ? 1 : 0,
+    threshold: THRESHOLD,
   };
 }
 
 const THRESHOLD = 30;
+
+describe("formatSelfScoreAudit", () => {
+  it("prints the maximum score and only the expected breached rows with audit fields", () => {
+    const report: SelfScoreReport = {
+      rows: [
+        makeRow("parseArgs", 50, 0),
+        makeRow("main", 45, 0),
+        makeRow("computeCrap", 5, 1),
+      ],
+      summary: {
+        totalFunctions: 3,
+        breachedCount: 2,
+        maxCrap: 50,
+        threshold: THRESHOLD,
+        breached: true,
+      },
+    };
+
+    expect(formatSelfScoreAudit(report)).toBe(
+      [
+        "Self-score audit evidence:",
+        "Maximum CRAP score: 50.0.",
+        "Expected breached rows:",
+        "- parseArgs: CRAP 50.0, coverage 0.0%, threshold 30.0",
+        "- main: CRAP 45.0, coverage 0.0%, threshold 30.0",
+      ].join("\n"),
+    );
+  });
+});
 
 describe("validateSelfScoreBreach", () => {
   it("passes when parseArgs and main exist, are uncovered, and breach threshold", () => {
