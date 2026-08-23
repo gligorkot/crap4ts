@@ -47,7 +47,8 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--coverage <file>` | Path to Istanbul `coverage-final.json` (Vitest V8 output). **Required.** | — |
-| `--threshold <number>` | CRAP failure threshold; breach when score > threshold. | `8` |
+| `--config <path>` | Load exactly this JS, TS, or JSON configuration file. | auto-discovery |
+| `--threshold <number>` | Override every configured CRAP failure threshold; breach when score > threshold. | `8` |
 | `--json` | Output JSON report instead of human-readable table. | off |
 | `--help` | Print usage and exit. | — |
 
@@ -58,6 +59,73 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | `0` | Success — no threshold breach. |
 | `1` | Invalid arguments or input (no stack trace). |
 | `2` | CRAP threshold exceeded. |
+
+## Configuration
+
+crap4ts discovers one configuration file from the project root (the current
+working directory), in this exact order:
+
+1. `crap4ts.config.ts`
+2. `crap4ts.config.js`
+3. `.crap4tsrc.json`
+
+Use `--config <path>` to select exactly one file instead; it disables discovery.
+A selected or discovered config that is missing, unreadable, invalid, or has an
+unsupported version is an input error (exit code 1). Config files are strict:
+their required `version` is `1`, unknown fields are rejected, and thresholds
+must be finite non-negative numbers.
+
+```ts
+// crap4ts.config.ts
+import { defineConfig } from "crap4ts";
+
+export default defineConfig({
+  version: 1,
+  src: ["src", "packages/api/src"],
+  exclude: ["src/generated/**", "**/*.generated.ts"],
+  threshold: 8,
+  thresholds: [
+    { glob: "src/legacy/**", threshold: 15 },
+    { glob: "src/security/**/*.ts", threshold: 4 },
+  ],
+});
+```
+
+```js
+// crap4ts.config.js
+import { defineConfig } from "crap4ts";
+
+export default defineConfig({
+  version: 1,
+  src: "src",
+  threshold: 8,
+});
+```
+
+JSON config has the same shape without `defineConfig`:
+
+```json
+{ "version": 1, "src": "src", "threshold": 8 }
+```
+
+`src` and `exclude` accept a string or an array of strings. Config paths and
+globs are relative to the config file's directory. `exclude` uses a small,
+deterministic glob language: `*` matches within one path segment, `**` matches
+across segments, and `?` matches one non-separator character. The built-in
+exclusions for declaration files, `node_modules`, `dist`, `coverage`, and `.git`
+always apply in addition to config exclusions.
+
+For a function path, `--threshold` wins when supplied. Otherwise the most
+specific matching `thresholds` rule wins; specificity is the number of literal
+characters (then fewer wildcards), and an earlier rule wins an exact tie. If no
+rule matches, the config `threshold` applies; if it is absent the default is 8.
+Each JSON report row and each human table row includes its applicable threshold,
+and the gate evaluates that row's CRAP score against that threshold.
+
+TypeScript and JavaScript configs execute local project code. Only run crap4ts
+against repositories whose configuration you trust. TypeScript config loading
+uses the package's TypeScript dependency at runtime, so the built `dist/cli.js`
+does not rely on a globally installed `tsx`.
 
 ## Generating coverage for crap4ts
 
@@ -209,7 +277,6 @@ breach occurs and is fully explained; it exits non-zero otherwise.
   future gate, not part of this release.
 - Framework-specific coverage adapters beyond Istanbul/V8 format
 - Branch-level coverage granularity (v1 uses Istanbul statement-level coverage)
-- Configuration files (`.crap4tsrc`); all config is via CLI flags
 - Architecture/dependency enforcement
 - Agent orchestration or automated refactoring
 - Release publishing automation
