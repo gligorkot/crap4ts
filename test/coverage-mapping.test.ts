@@ -8,9 +8,13 @@ import type { FunctionInfo } from "../src/complexity.js";
 
 /**
  * Helper: build a minimal Istanbul file-entry payload for testing.
+ *
+ * loc ranges use [startLine, endLine]. The loc represents the executable
+ * span as reported by Istanbul/V8; the analyzed function range includes the
+ * declaration header, so the loc is typically a sub-range of the function.
  */
 function makeFileEntry(
-  fnMap: Record<string, { name: string; start: [number, number]; end: [number, number] }>,
+  fnMap: Record<string, { name: string; start: number; end: number }>,
   f: Record<string, number>,
   filePath = "/abs/path/sample.ts",
 ) {
@@ -21,8 +25,8 @@ function makeFileEntry(
         k,
         {
           name: v.name,
-          decl: { start: { line: v.start[0], column: 0 }, end: { line: v.start[0], column: 10 } },
-          loc: { start: { line: v.start[0], column: 0 }, end: { line: v.end[0], column: null } },
+          decl: { start: { line: v.start, column: 0 }, end: { line: v.start, column: 10 } },
+          loc: { start: { line: v.start, column: 0 }, end: { line: v.end, column: null } },
         },
       ]),
     ),
@@ -54,40 +58,41 @@ function makeFunction(
 }
 
 describe("mapFunctionCoverage — containment-only matching", () => {
-  it("matches a function fully contained within a coverage loc range", () => {
+  it("matches a function whose range contains a coverage loc", () => {
+    // Function at 5-10 (declaration header at line 5), loc at 6-8 (body).
+    // The loc is contained within the function's range.
     const entry = makeFileEntry(
-      { "0": { name: "foo", start: [5, 0], end: [10, 0] } },
+      { "0": { name: "foo", start: 6, end: 8 } },
       { "0": 3 },
     );
-    const fn = makeFunction("foo", 6, 8);
+    const fn = makeFunction("foo", 5, 10);
     const result = mapFunctionCoverage(entry, fn);
     expect(result.matched).toBe(true);
     expect(result.coverage).toBe(1);
     expect(result.count).toBe(3);
   });
 
-  it("does NOT match a function that merely overlaps but is not contained", () => {
-    // Function spans lines 5-12, coverage loc spans 5-10. Overlap exists but
-    // the function extends beyond the loc range, so it is not contained.
+  it("does NOT match a function whose range does not contain the loc", () => {
+    // Function at 5-8, loc at 5-10. The loc extends beyond the function,
+    // so it is not contained within the function's range.
     const entry = makeFileEntry(
-      { "0": { name: "foo", start: [5, 0], end: [10, 0] } },
+      { "0": { name: "foo", start: 5, end: 10 } },
       { "0": 3 },
     );
-    const fn = makeFunction("bigFn", 5, 12);
+    const fn = makeFunction("bigFn", 5, 8);
     const result = mapFunctionCoverage(entry, fn);
     expect(result.matched).toBe(false);
     expect(result.coverage).toBe(0);
   });
 
-  it("does NOT match when a partial overlap could falsely claim 100% coverage", () => {
-    // Two functions on adjacent lines. The coverage entry for fn1 (executed)
-    // overlaps fn2's range by one line. A partial-overlap matcher would
-    // wrongly attribute fn1's coverage to fn2.
+  it("does NOT match when a partial overlap could falsely claim coverage", () => {
+    // Function at 5-7, loc at 3-5. The loc's end (5) overlaps the function's
+    // start (5) but the loc is not fully contained in the function.
+    // A partial-overlap matcher would wrongly attribute the loc's coverage.
     const entry = makeFileEntry(
-      { "0": { name: "fn1", start: [3, 0], end: [5, 0] } },
-      { "0": 10 }, // fn1 executed 10 times
+      { "0": { name: "fn1", start: 3, end: 5 } },
+      { "0": 10 },
     );
-    // fn2 starts at line 5 (overlaps fn1's loc end) and extends to line 7.
     const fn2 = makeFunction("fn2", 5, 7);
     const result = mapFunctionCoverage(entry, fn2);
     expect(result.matched).toBe(false);
@@ -96,42 +101,50 @@ describe("mapFunctionCoverage — containment-only matching", () => {
 });
 
 describe("mapFunctionCoverage — nested / same-line functions", () => {
-  it("matches an outer function to its own loc, not the inner function's loc", () => {
-    // Outer function lines 1-5, inner function lines 2-3. Both are contained
-    // within the outer loc, but the inner loc is more specific. The function
-    // whose range is exactly contained by exactly one loc should match that
-    // one, not the broader one.
+  it("matches an outer function to the largest loc contained within it", () => {
+    // Outer function at 1-5, inner loc at 2-3, outer loc at 1-5.
+    // Both locs are contained within the outer function's range. The largest
+    // loc (1-5) is the outer function's own body loc, so it should match.
     const entry = makeFileEntry(
       {
-        "0": { name: "outer", start: [1, 0], end: [5, 0] },
-        "1": { name: "inner", start: [2, 0], end: [3, 0] },
+        "0": { name: "outer", start: 1, end: 5 },
+        "1": { name: "inner", start: 2, end: 3 },
       },
       { "0": 1, "1": 5 },
     );
     const outer = makeFunction("outer", 1, 5);
-    const inner = makeFunction("inner", 2, 3);
-    const outerResult = mapFunctionCoverage(entry, outer);
-    const innerResult = mapFunctionCoverage(entry, inner);
-    // outer is contained by loc "0" only (not "1"), inner is contained by "1" only.
-    // But outer is also "contained" by loc "0". Inner is contained by both "0" and "1".
-    // When two entries both contain the function, that's ambiguous -> unmatched.
-    // Inner should be ambiguous (contained by both), so unmatched.
-    // Outer should match "0" uniquely.
-    expect(outerResult.matched).toBe(true);
-    expect(outerResult.count).toBe(1);
-    // Inner is contained by both loc "0" (lines 1-5) and loc "1" (lines 2-3),
-    // which is ambiguous — we cannot determine which coverage entry applies.
-    expect(innerResult.matched).toBe(false);
+    const result = mapFunctionCoverage(entry, outer);
+    expect(result.matched).toBe(true);
+    expect(result.count).toBe(1);
   });
 
-  it("same-line functions (two functions on the same line) are ambiguous", () => {
-    // Two functions declared on the same line, two coverage entries on the
-    // same line. Both entries contain both functions, so the match is
-    // ambiguous and both should report unmatched.
+  it("matches an inner function to its own loc, not the outer loc", () => {
+    // Inner function at 2-3, inner loc at 2-3, outer loc at 1-5.
+    // Both locs contain the inner function's range. The largest loc (1-5) is
+    // the outer's, not the inner's. The inner should match the loc that is
+    // contained within the inner's range: loc "1" (2-3) is contained in the
+    // inner (2-3), loc "0" (1-5) is NOT contained in the inner (2-3).
     const entry = makeFileEntry(
       {
-        "0": { name: "fnA", start: [1, 0], end: [1, 0] },
-        "1": { name: "fnB", start: [1, 0], end: [1, 0] },
+        "0": { name: "outer", start: 1, end: 5 },
+        "1": { name: "inner", start: 2, end: 3 },
+      },
+      { "0": 1, "1": 5 },
+    );
+    const inner = makeFunction("inner", 2, 3);
+    const result = mapFunctionCoverage(entry, inner);
+    expect(result.matched).toBe(true);
+    expect(result.count).toBe(5);
+  });
+
+  it("same-line functions with same-line locs are ambiguous", () => {
+    // Two functions on the same line, two locs on the same line. Both locs
+    // are contained within both functions, and both locs have the same size.
+    // The match is ambiguous.
+    const entry = makeFileEntry(
+      {
+        "0": { name: "fnA", start: 1, end: 1 },
+        "1": { name: "fnB", start: 1, end: 1 },
       },
       { "0": 1, "1": 0 },
     );
@@ -145,7 +158,7 @@ describe("mapFunctionCoverage — nested / same-line functions", () => {
 
   it("exact same-line single function matches uniquely", () => {
     const entry = makeFileEntry(
-      { "0": { name: "single", start: [1, 0], end: [1, 0] } },
+      { "0": { name: "single", start: 1, end: 1 } },
       { "0": 4 },
     );
     const fn = makeFunction("single", 1, 1);
@@ -156,27 +169,30 @@ describe("mapFunctionCoverage — nested / same-line functions", () => {
 });
 
 describe("mapFunctionCoverage — partial function coverage", () => {
-  it("reports coverage 0 (not 1) for a contained function with count 0", () => {
-    // The function is contained within a loc entry, but that entry was never
+  it("reports coverage 0 (not 1) for a matched function with count 0", () => {
+    // The loc is contained within the function, but the entry was never
     // executed (count 0). Coverage must be 0, not 1.
     const entry = makeFileEntry(
-      { "0": { name: "unexecuted", start: [3, 0], end: [8, 0] } },
+      { "0": { name: "unexecuted", start: 3, end: 8 } },
       { "0": 0 },
     );
-    const fn = makeFunction("unexecuted", 4, 6);
+    const fn = makeFunction("unexecuted", 2, 9);
     const result = mapFunctionCoverage(entry, fn);
     expect(result.matched).toBe(true);
     expect(result.coverage).toBe(0);
     expect(result.count).toBe(0);
   });
 
-  it("does not claim 100% coverage from an adjacent executed entry", () => {
-    // fn spans 10-15, entry "0" (executed) spans 8-12, entry "1" (unexecuted) spans 13-17.
-    // fn overlaps both but is contained by neither -> unmatched, coverage 0.
+  it("does not claim coverage from an adjacent executed loc", () => {
+    // fn at 10-15, loc "0" (executed) at 8-12, loc "1" (unexecuted) at 13-17.
+    // Neither loc is fully contained in the fn's range (10-15):
+    //   loc "0" (8-12): 8 < 10, not contained
+    //   loc "1" (13-17): 17 > 15, not contained
+    // -> unmatched, coverage 0.
     const entry = makeFileEntry(
       {
-        "0": { name: "before", start: [8, 0], end: [12, 0] },
-        "1": { name: "after", start: [13, 0], end: [17, 0] },
+        "0": { name: "before", start: 8, end: 12 },
+        "1": { name: "after", start: 13, end: 17 },
       },
       { "0": 5, "1": 0 },
     );
@@ -188,24 +204,21 @@ describe("mapFunctionCoverage — partial function coverage", () => {
 });
 
 describe("mapAllCoverage — ambiguous repeated suffix paths", () => {
-  it("does not match when two coverage files share the same suffix", () => {
-    // Two files named "sample.ts" in different directories. The source path
-    // "src/a/sample.ts" should NOT match either when both are ambiguous.
+  it("matches by exact path when available", () => {
     const coverage = {
       "key1": makeFileEntry(
-        { "0": { name: "fn", start: [1, 0], end: [3, 0] } },
+        { "0": { name: "fn", start: 1, end: 3 } },
         { "0": 1 },
         "/project/src/a/sample.ts",
       ),
       "key2": makeFileEntry(
-        { "0": { name: "fn", start: [1, 0], end: [3, 0] } },
+        { "0": { name: "fn", start: 1, end: 3 } },
         { "0": 1 },
         "/other/src/b/sample.ts",
       ),
     };
     const fn = makeFunction("fn", 1, 3, "/project/src/a/sample.ts");
     const results = mapAllCoverage([fn], coverage);
-    // With exact path match available, it should match key1.
     expect(results[0]?.matched).toBe(true);
   });
 
@@ -214,12 +227,12 @@ describe("mapAllCoverage — ambiguous repeated suffix paths", () => {
     // both end in sample.ts. Suffix match is ambiguous -> no match.
     const coverage = {
       "key1": makeFileEntry(
-        { "0": { name: "fn", start: [1, 0], end: [3, 0] } },
+        { "0": { name: "fn", start: 1, end: 3 } },
         { "0": 1 },
         "/dirA/sample.ts",
       ),
       "key2": makeFileEntry(
-        { "0": { name: "fn", start: [1, 0], end: [3, 0] } },
+        { "0": { name: "fn", start: 1, end: 3 } },
         { "0": 1 },
         "/dirB/sample.ts",
       ),
@@ -234,7 +247,7 @@ describe("mapAllCoverage — ambiguous repeated suffix paths", () => {
     // Only one coverage file ends in "unique.ts".
     const coverage = {
       "key1": makeFileEntry(
-        { "0": { name: "fn", start: [1, 0], end: [3, 0] } },
+        { "0": { name: "fn", start: 1, end: 3 } },
         { "0": 1 },
         "/some/dir/unique.ts",
       ),

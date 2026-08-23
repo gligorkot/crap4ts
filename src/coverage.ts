@@ -7,9 +7,12 @@
  *
  * v1 coverage semantics — **executed / not-executed function hit coverage**:
  * Each function is matched to an Istanbul `fnMap` entry by containment: the
- * function's [startLine, endLine] range must be fully within the entry's `loc`
- * line range, and exactly one entry must contain it (ambiguous matches are
- * rejected). Coverage is then boolean: `count > 0` => covered (1), else
+ * coverage entry's `loc` line range must be fully within the function's
+ * [startLine, endLine] range (the function declaration header often precedes
+ * the first executable line, so the loc is a sub-range of the function). The
+ * most specific (smallest) containing function wins. When two or more
+ * functions of the same size both contain the loc, the match is ambiguous and
+ * rejected. Coverage is then boolean: `count > 0` => covered (1), else
  * uncovered (0). Functions with no unambiguous matching entry report coverage
  * 0 (matched: false). This is **not** statement or branch coverage — it only
  * records whether a function was entered at least once.
@@ -164,25 +167,26 @@ function commonSuffixSegments(a: string[], b: string[]): number {
 /**
  * Map a single function to its coverage entry using containment-only matching.
  *
- * The function's [startLine, endLine] range must be **fully contained** within
- * a coverage entry's `loc` line range (loc.start.line <= fn.startLine AND
- * loc.end.line >= fn.endLine). Partial overlaps are NOT sufficient, because a
- * partial overlap cannot determine whether the coverage entry describes this
- * function or a neighbouring one.
+ * A coverage entry's `loc` line range must be **fully contained within** the
+ * function's [startLine, endLine] range (fn.startLine <= loc.start.line AND
+ * fn.endLine >= loc.end.line). This is because the function declaration header
+ * often precedes the first executable line, so the loc is a sub-range of the
+ * function's source range.
  *
- * When exactly one entry contains the function, that entry is used. When zero
- * entries contain the function, returns coverage 0 with `matched: false`. When
- * two or more entries contain the function (ambiguous), returns `matched:
- * false` — we cannot safely determine which entry applies, so we report
- * "not executed" rather than guessing.
+ * Among all locs contained within the function, the **largest** loc (closest
+ * to the function's own range) is chosen — this is the function's own body
+ * loc, not a nested function's loc. When two or more locs tie for the largest
+ * size, the match is ambiguous and rejected (matched: false). Partial overlaps
+ * are NOT sufficient — a loc that extends beyond the function's range cannot
+ * be attributed to this function.
  */
 export function mapFunctionCoverage(
   fileEntry: IstanbulFileEntry,
   fn: FunctionInfo,
 ): FunctionCoverage {
   let bestKey: string | null = null;
-  let bestCount = 0;
-  let matchCount = 0;
+  let bestSize = -1;
+  let tieCount = 0;
 
   for (const key of Object.keys(fileEntry.fnMap)) {
     const entry = fileEntry.fnMap[key];
@@ -193,21 +197,23 @@ export function mapFunctionCoverage(
     if (count === undefined) {
       continue;
     }
-    // Containment check: the function's line range must be fully within the
-    // coverage loc's line range.
-    if (
-      entry.loc.start.line <= fn.startLine &&
-      entry.loc.end.line >= fn.endLine
-    ) {
-      matchCount++;
-      bestKey = key;
-      bestCount = count;
+    // Containment check: the loc must be fully within the function's range.
+    const locStart = entry.loc.start.line;
+    const locEnd = entry.loc.end.line;
+    if (fn.startLine <= locStart && fn.endLine >= locEnd) {
+      const size = locEnd - locStart;
+      if (size > bestSize) {
+        bestSize = size;
+        bestKey = key;
+        tieCount = 0;
+      } else if (size === bestSize) {
+        tieCount++;
+      }
     }
   }
 
-  // Ambiguous: two or more entries contain this function's range. We cannot
-  // safely determine which coverage entry applies, so report unmatched.
-  if (matchCount !== 1) {
+  // No match, or ambiguous (two or more locs tie for the largest size).
+  if (bestKey === null || tieCount > 0) {
     return {
       functionInfo: fn,
       coverage: 0,
@@ -216,6 +222,7 @@ export function mapFunctionCoverage(
     };
   }
 
+  const bestCount = fileEntry.f[bestKey] ?? 0;
   // Coverage: 1 if executed at least once, 0 otherwise.
   // (V8 function coverage is boolean-ish: count > 0 => covered.)
   const coverage = bestCount > 0 ? 1 : 0;

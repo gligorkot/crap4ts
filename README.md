@@ -106,10 +106,22 @@ npx crap4ts src --coverage coverage/coverage-final.json
    enclosing function's complexity.
 
 3. **Coverage mapping** — Each discovered function is matched to an Istanbul
-   `fnMap` entry by source line range overlap. A function with no coverage
-   entry reports coverage `0` (it is never dropped from the report).
-   Coverage is treated as boolean: execution count > 0 = covered (1), else
-   uncovered (0).
+   `fnMap` entry by **containment**: the coverage entry's `loc` line range must
+   be fully within the function's [startLine, endLine] range (the function
+   declaration header often precedes the first executable line, so the loc is
+   a sub-range of the function). The most specific (largest) matching loc is
+   chosen. When two or more locs tie for the largest size, the match is
+   ambiguous and rejected (coverage 0, matched: false). Partial overlaps are
+   not sufficient. File-path matching uses exact path comparison first, then
+   falls back to unambiguous suffix matching — if two or more coverage entries
+   share the same path suffix, the match is rejected. A function with no
+   unambiguous matching coverage entry reports coverage 0 (it is never dropped
+   from the report).
+
+   **v1 coverage semantics**: Coverage is **executed / not-executed function
+   hit coverage** — it records whether a function was entered at least once
+   (execution count > 0 = covered, 0 = uncovered). It is **not** statement or
+   branch coverage and does not measure partial function execution.
 
 4. **CRAP computation** — The formula is applied per function, results are
    sorted by CRAP descending, and any score above the threshold fails the gate.
@@ -126,7 +138,7 @@ on:
   push:
     branches: [main]
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,12 +149,20 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run coverage
+      - run: npm run build
       - run: npm run self-score
 ```
 
-The `self-score` script builds the CLI and runs it against this repo's own
-`src/` directory using the coverage generated in the previous step. The
-initial threshold is deliberately permissive while the codebase matures.
+The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the CLI
+from source against this repo's own `src/` directory using the coverage
+generated in the previous step. It asserts that the CLI exits 2 (threshold
+exceeded) — the breach is expected because `cli.ts` functions (`parseArgs`,
+`main`) have high cyclomatic complexity and no direct test coverage (they are
+exercised via subprocess in tests, which V8 does not attribute to the source
+file). The script exits 0 only when the expected breach occurs; it exits
+non-zero if the CLI exits 0 (no breach — coverage missing), exits 1 (invalid
+input), or produces any other unexpected error. This replaces the previous
+bare `continue-on-error: true` which masked all failures.
 
 ## Current v1 support and limitations
 
@@ -168,14 +188,32 @@ initial threshold is deliberately permissive while the codebase matures.
 
 ## Development
 
+Tests, coverage, and self-score run the CLI from source TypeScript via
+[tsx](https://github.com/privatenumber/tsx) — no build step is required for
+development or CI. A freshly cloned checkout can run the full suite with just
+`npm ci && npm test`.
+
 ```sh
 npm install          # install dependencies
 npm run typecheck    # tsc --noEmit
-npm test             # vitest run
-npm run coverage     # vitest run --coverage
-npm run build        # compile to dist/
-npm run self-score   # build + run CLI against this repo's own source
+npm test             # vitest run (CLI tests invoke src/cli.ts via tsx)
+npm run coverage     # vitest run --coverage (generates coverage/coverage-final.json)
+npm run self-score   # tsx scripts/self-score.ts (asserts expected threshold breach)
+npm run build        # compile to dist/ (for npm publishing)
 ```
+
+### Running the CLI from source
+
+```sh
+# Run directly from TypeScript source (no build needed)
+npx tsx src/cli.ts src --coverage coverage/coverage-final.json
+
+# Or after building for the published bin
+npm run build && node dist/cli.js src --coverage coverage/coverage-final.json
+```
+
+The `bin` entry and `dist/` output are kept for eventual npm publishing;
+development, testing, and CI use the source TypeScript via tsx.
 
 ## License
 

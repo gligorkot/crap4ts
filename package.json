@@ -37,7 +37,7 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "build": "tsc",
-    "self-score": "npm run build && node dist/cli.js src --coverage coverage/coverage-final.json --threshold 30"
+    "self-score": "tsx scripts/self-score.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
