@@ -235,6 +235,22 @@ describe("configuration", () => {
     }
   });
 
+  it("rejects a symlinked config source that escapes a read-only project through the built CLI", () => {
+    const project = tempProject();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "crap4ts-outside-"));
+    tempDirs.push(outside);
+    fs.symlinkSync(outside, path.join(project, "escaped-src"), "dir");
+    fs.writeFileSync(path.join(project, ".crap4tsrc.json"), JSON.stringify({ version: 1, src: "escaped-src" }));
+    fs.chmodSync(project, 0o555);
+    try {
+      const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("config.src");
+    } finally {
+      fs.chmodSync(project, 0o755);
+    }
+  });
+
   it("rejects empty, absolute, and project-escaping config src paths through the built CLI", () => {
     for (const src of [[], "/tmp", "../outside", "src/../../outside"]) {
       const project = tempProject();

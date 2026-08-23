@@ -64,8 +64,9 @@ export async function loadConfig(
   }
   if (!stat.isFile()) throw new Error(`config path is not a file: ${configPath}`);
 
-  const config = await readConfig(configPath);
-  return { config, configPath, projectRoot: path.dirname(configPath) };
+  const resolvedConfigPath = fs.realpathSync(configPath);
+  const config = await readConfig(resolvedConfigPath);
+  return { config, configPath: resolvedConfigPath, projectRoot: path.dirname(resolvedConfigPath) };
 }
 
 /** Match a file path against a config glob relative to the project root. */
@@ -105,7 +106,7 @@ export function isConfigExcluded(filePath: string, projectRoot: string, config: 
   return patterns.some((pattern) => matchesConfigPattern(filePath, projectRoot, pattern));
 }
 
-function validateConfig(value: unknown): Crap4tsConfig {
+function validateConfig(value: unknown, configRoot?: string): Crap4tsConfig {
   if (!isPlainObject(value)) throw new Error("config must export an object");
   const allowed = new Set(["version", "src", "exclude", "threshold", "thresholds"]);
   for (const key of Object.keys(value)) {
@@ -114,7 +115,7 @@ function validateConfig(value: unknown): Crap4tsConfig {
   if (value["version"] !== CONFIG_VERSION) {
     throw new Error(`config.version must be ${CONFIG_VERSION}`);
   }
-  const src = validateSourcePaths(value["src"]);
+  const src = validateSourcePaths(value["src"], configRoot);
   const exclude = validateStringList(value["exclude"], "exclude");
   const threshold = validateThreshold(value["threshold"], "threshold");
   let thresholds: readonly PathThresholdRule[] | undefined;
@@ -150,7 +151,7 @@ function validateStringList(value: unknown, name: string): string | readonly str
   return typeof value === "string" ? value : Object.freeze([...entries]);
 }
 
-function validateSourcePaths(value: unknown): string | readonly string[] | undefined {
+function validateSourcePaths(value: unknown, configRoot?: string): string | readonly string[] | undefined {
   const src = validateStringList(value, "src");
   if (src === undefined) return undefined;
   const entries = typeof src === "string" ? [src] : src;
@@ -160,8 +161,24 @@ function validateSourcePaths(value: unknown): string | readonly string[] | undef
     if (path.isAbsolute(entry) || path.win32.isAbsolute(entry) || path.posix.isAbsolute(normalized) || normalized === ".." || normalized.startsWith("../")) {
       throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
     }
+    if (configRoot !== undefined) {
+      let sourceRoot: string;
+      try {
+        sourceRoot = fs.realpathSync(path.resolve(configRoot, entry));
+      } catch (error) {
+        throw new Error(`config.src cannot be resolved, got "${entry}": ${(error as Error).message}`);
+      }
+      if (!isContainedPath(configRoot, sourceRoot)) {
+        throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
+      }
+    }
   }
   return src;
+}
+
+function isContainedPath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function validateThreshold(value: unknown, name: string): number | undefined {
@@ -179,12 +196,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 async function readConfig(configPath: string): Promise<Crap4tsConfig> {
   try {
     if (configPath.endsWith(".json")) {
-      return validateConfig(JSON.parse(fs.readFileSync(configPath, "utf8")));
+      return validateConfig(JSON.parse(fs.readFileSync(configPath, "utf8")), path.dirname(configPath));
     }
     const module = configPath.endsWith(".ts")
       ? await importTranspiledTypeScript(configPath)
       : await import(pathToFileURL(configPath).href);
-    return validateConfig(module.default);
+    return validateConfig(module.default, path.dirname(configPath));
   } catch (error) {
     throw new Error(`invalid config ${configPath}: ${(error as Error).message}`);
   }
