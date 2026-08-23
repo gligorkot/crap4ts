@@ -252,10 +252,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
       - run: npm run coverage
       - run: npm run build
       - run: npm run self-score
@@ -275,8 +274,10 @@ have high cyclomatic complexity and no direct test coverage (they are
 exercised via subprocess in tests, which V8 does not attribute to the
 source file). The pure validation logic is in
 `src/self-score-helpers.ts` and has unit test coverage via
-`test/self-score.test.ts`. The script exits 0 only when the expected
-breach occurs and is fully explained; it exits non-zero otherwise.
+`test/self-score.test.ts`. On success, its output records the maximum CRAP
+score and the exact expected breached rows with each row's name, CRAP score,
+coverage, and threshold. The script exits 0 only when the expected breach
+occurs and is fully explained; it exits non-zero otherwise.
 
 ## Current v1 support and limitations
 
@@ -303,16 +304,23 @@ breach occurs and is fully explained; it exits non-zero otherwise.
 
 Tests, coverage, and self-score run the CLI from source TypeScript via
 [tsx](https://github.com/privatenumber/tsx) — no build step is required for
-development or CI. A freshly cloned checkout can run the full suite with just
-`npm ci && npm test`.
+development or CI. `.nvmrc` pins the validated Node 22 runtime to `22.22.3`,
+so use `nvm use` (or an equivalent version manager) before installing
+dependencies. A freshly cloned checkout can run the CI-equivalent suite with
+`npm ci && npm run typecheck && npm run coverage && npm run build && npm run self-score`.
+CI deliberately uses `npm run coverage` as its one test execution because it
+runs the Vitest suite and produces the coverage artifact consumed by self-score.
 
 ```sh
-npm install          # install dependencies
-npm run typecheck    # tsc --noEmit
-npm test             # vitest run (CLI tests invoke src/cli.ts via tsx)
-npm run coverage     # vitest run --coverage (generates coverage/coverage-final.json)
-npm run self-score   # tsx scripts/self-score.ts (asserts expected threshold breach)
-npm run build        # compile to dist/ (for npm publishing)
+nvm use             # read the validated 22.22.3 runtime from .nvmrc
+npm ci              # install dependencies exactly as CI does
+npm run typecheck   # tsc --noEmit
+npm run coverage    # Vitest test execution used by CI; generates coverage/coverage-final.json
+npm run build       # compile to dist/ (for npm publishing)
+npm run self-score  # assert expected threshold breach and print audit evidence
+
+# Optional faster local test run when coverage output is not needed:
+npm test            # vitest run (CLI tests invoke src/cli.ts via tsx)
 ```
 
 ### Running the CLI from source
