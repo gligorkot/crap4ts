@@ -47,7 +47,8 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--coverage <file>` | Path to Istanbul `coverage-final.json` (Vitest V8 output). **Required.** | — |
-| `--threshold <number>` | CRAP failure threshold; breach when score > threshold. | `8` |
+| `--config <path>` | Load exactly this TS, ESM (`.mjs`), CommonJS (`.cjs`), module-system-dependent JS (`.js`), or JSON configuration file. | auto-discovery |
+| `--threshold <number>` | Override every configured CRAP failure threshold; breach when score > threshold. | `8` |
 | `--json` | Output JSON report instead of human-readable table. | off |
 | `--help` | Print usage and exit. | — |
 
@@ -58,6 +59,91 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | `0` | Success — no threshold breach. |
 | `1` | Invalid arguments or input (no stack trace). |
 | `2` | CRAP threshold exceeded. |
+
+## Configuration
+
+crap4ts discovers one configuration file from the project root (the current
+working directory), in this exact order:
+
+1. `crap4ts.config.ts`
+2. `crap4ts.config.mjs`
+3. `crap4ts.config.cjs`
+4. `crap4ts.config.js`
+5. `.crap4tsrc.json`
+
+Use `--config <path>` to select exactly one file instead; it disables discovery.
+A selected or discovered config that is missing, unreadable, invalid, or has an
+unsupported version is an input error (exit code 1). Config files are strict:
+their required `version` is `1`, unknown fields are rejected, and thresholds
+must be finite non-negative numbers.
+
+```ts
+// crap4ts.config.ts
+import { defineConfig } from "crap4ts";
+
+export default defineConfig({
+  version: 1,
+  src: ["src", "packages/api/src"],
+  exclude: ["src/generated/**", "**/*.generated.ts"],
+  threshold: 8,
+  thresholds: [
+    { glob: "src/legacy/**", threshold: 15 },
+    { glob: "src/security/**/*.ts", threshold: 4 },
+  ],
+});
+```
+
+```js
+// crap4ts.config.mjs — ESM in every project module system
+import { defineConfig } from "crap4ts";
+
+export default defineConfig({
+  version: 1,
+  src: "src",
+  threshold: 8,
+});
+```
+
+```js
+// crap4ts.config.cjs — CommonJS in every project module system
+module.exports = {
+  version: 1,
+  src: "src",
+  threshold: 8,
+};
+```
+
+JSON config has the same shape without `defineConfig`:
+
+```json
+{ "version": 1, "src": "src", "threshold": 8 }
+```
+
+`src` and `exclude` accept a string or an array of strings. `src` must contain
+at least one project-relative path and may not be absolute or escape the config
+file's directory; this keeps exclude and per-path threshold matching unambiguous.
+Config paths and globs are relative to the config file's directory. `exclude`
+uses a small, deterministic glob language: `*` matches within one path segment,
+`**` matches across segments, and `?` matches one non-separator character. The
+built-in exclusions for declaration files, `node_modules`, `dist`, `coverage`,
+and `.git` always apply in addition to config exclusions.
+
+For a function path, `--threshold` wins when supplied. Otherwise the most
+specific matching `thresholds` rule wins; rules compare lexicographically by
+literal character count (more wins), wildcard count (fewer wins), then declaration
+order (earlier wins an exact tie). If no rule matches, the config `threshold`
+applies; if it is absent the default is 8.
+Each JSON report row and each human table row includes its applicable threshold,
+and the gate evaluates that row's CRAP score against that threshold.
+
+TypeScript and JavaScript configs execute local project code. Only run crap4ts
+against repositories whose configuration you trust. TypeScript config loading
+uses the package's TypeScript dependency at runtime and executes the transpiled
+module in memory with resolution rooted at the config file; the built `dist/cli.js`
+never writes generated files into the project. Use `.mjs` for portable ESM and
+`.cjs` for portable CommonJS. A `.js` config follows Node's normal module-system
+rules from the nearest `package.json` (`type: "module"` for ESM; otherwise
+CommonJS), so it is not a universal ESM form.
 
 ## Generating coverage for crap4ts
 
@@ -209,7 +295,6 @@ breach occurs and is fully explained; it exits non-zero otherwise.
   future gate, not part of this release.
 - Framework-specific coverage adapters beyond Istanbul/V8 format
 - Branch-level coverage granularity (v1 uses Istanbul statement-level coverage)
-- Configuration files (`.crap4tsrc`); all config is via CLI flags
 - Architecture/dependency enforcement
 - Agent orchestration or automated refactoring
 - Release publishing automation

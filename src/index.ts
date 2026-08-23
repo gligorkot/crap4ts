@@ -20,6 +20,8 @@ export {
   EXPECTED_BREACH_NAMES,
 } from "./self-score-helpers.js";
 
+export { defineConfig, CONFIG_VERSION } from "./config.js";
+
 export type {
   CrapResult,
   ThresholdOutcome,
@@ -29,3 +31,5 @@ export type {
   SelfScoreReport,
   SelfScoreRow,
 } from "./self-score-helpers.js";
+
+export type { Crap4tsConfig, PathThresholdRule } from "./config.js";

@@ -325,7 +325,10 @@ export function shouldExclude(filePath: string): boolean {
  * @param roots - directory paths to walk
  * @returns array of absolute file paths
  */
-export function discoverSourceFiles(roots: string[]): string[] {
+export function discoverSourceFiles(
+  roots: string[],
+  shouldExcludeAdditional?: (filePath: string) => boolean,
+): string[] {
   const results: string[] = [];
   const seen = new Set<string>();
   for (const root of roots) {
@@ -336,18 +339,23 @@ export function discoverSourceFiles(roots: string[]): string[] {
     const stat = fs.statSync(absRoot);
     if (stat.isFile()) {
       const norm = path.resolve(absRoot);
-      if (!seen.has(norm) && isSourceFile(norm) && !shouldExclude(norm)) {
+      if (!seen.has(norm) && isSourceFile(norm) && !shouldExclude(norm) && !shouldExcludeAdditional?.(norm)) {
         seen.add(norm);
         results.push(norm);
       }
       continue;
     }
-    walkDir(absRoot, results, seen);
+    walkDir(absRoot, results, seen, shouldExcludeAdditional);
   }
   return results.sort();
 }
 
-function walkDir(dir: string, results: string[], seen: Set<string>): void {
+function walkDir(
+  dir: string,
+  results: string[],
+  seen: Set<string>,
+  shouldExcludeAdditional: ((filePath: string) => boolean) | undefined,
+): void {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
@@ -355,8 +363,8 @@ function walkDir(dir: string, results: string[], seen: Set<string>): void {
       if (DEFAULT_EXCLUDE_DIRS.has(entry.name)) {
         continue;
       }
-      walkDir(full, results, seen);
-    } else if (entry.isFile() && isSourceFile(full) && !shouldExclude(full)) {
+      walkDir(full, results, seen, shouldExcludeAdditional);
+    } else if (entry.isFile() && isSourceFile(full) && !shouldExclude(full) && !shouldExcludeAdditional?.(full)) {
       const norm = path.resolve(full);
       if (!seen.has(norm)) {
         seen.add(norm);
