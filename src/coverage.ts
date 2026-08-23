@@ -5,28 +5,51 @@
  * Vitest's V8 provider, which converts V8 raw coverage to Istanbul) and maps
  * each analyzed function to a coverage decimal in [0, 1].
  *
- * v1 coverage semantics — **per-function statement coverage fraction**:
+ * v1 coverage semantics — **per-function statement coverage fraction**, with
+ * safe per-file ownership:
  *
- * Each function is matched to an Istanbul file entry by an unambiguous
- * project-relative path match (exact normalized, or anchored suffix — never
- * basename-only). Within the matched file, the function is associated to the
- * fnMap entry whose `loc` is contained within the function's line+column
- * range and is the most specific (smallest containing loc). This is used
- * only for identity association; coverage is NOT derived from the fnMap
- * boolean hit (`f[id] > 0`).
+ * Assignment is performed per file over ALL source functions and ALL Istanbul
+ * fnMap entries before any fraction is computed, so every fnMap entry and
+ * every statement is owned by **at most one** source function. This mirrors the
+ * invariant of the reference implementations, where coverage units belong to
+ * exactly one method/function:
+ * - Java/JaCoCo: covered instructions / total instructions per *method*; a
+ *   lambda's instructions are reported against the lambda, not the enclosing
+ *   method.
+ * - Go: covered coverage statements / total statements in the function's
+ *   range; each coverage segment maps to the function whose source range
+ *   contains it.
+ * - Clojure: covered forms / total forms for the function's line span, keyed
+ *   by the `defn` name boundary.
  *
- * Coverage is derived from Istanbul `statementMap` / `s` data: the fraction
- * of statements whose ranges fall within the function's line+column source
- * range that were executed at least once. This mirrors the core invariant of
- * the reference implementations:
- * - Java/JaCoCo: covered instructions / total instructions per method
- * - Go: covered coverage statements / total statements in the function range
- * - Clojure: covered forms / total forms in the function range
+ * The algorithm, per file:
  *
- * Partial execution produces 0 < coverage < 1. An uncovered function (all
- * statements have count 0) reports coverage 0. A function with no matching
- * statements (e.g. unmatched, or only declarations) reports coverage 0 with
- * `matched: false`. A function fully executed reports coverage 1.
+ * 1. **fnMap → source function.** Each fnMap entry is assigned to AT MOST ONE
+ *    source function: the uniquely most-specific containing function, using
+ *    line+column ranges (smallest source range that contains the entry's
+ *    `loc`). Tied/equally-specific candidates are ambiguous and the entry is
+ *    assigned to none. A source function with at least one assigned fnMap
+ *    entry has a valid coverage identity (`matched: true`).
+ *
+ * 2. **Statements → matched source function.** Each Istanbul statement is
+ *    owned by AT MOST ONE **matched** source function: the uniquely
+ *    most-specific matched function containing the statement's line+column
+ *    range. A statement whose most-specific containing matched function is
+ *    an inner callback is NOT attributed to its outer parent — statements
+ *    belonging to an inner callback never contribute to the outer
+ *    function's numerator or denominator. Ambiguous statements (tied
+ *    candidates) are excluded conservatively.
+ *
+ * 3. **Fraction.** Within the correctly owned statements, coverage = covered
+ *    statement count / total owned statement count. An uncovered function
+ *    (all owned statements have count 0) reports coverage 0. A function with
+ *    a valid identity but no owned statements reports coverage 0 with
+ *    `matched: true` and zero statements. An unmatched function reports
+ *    coverage 0 with `matched: false` and zero statements.
+ *
+ * Same-line `first` / `second` cases use real distinct columns: a surviving
+ * fnMap entry maps only to its exact column-matching source function; ties
+ * reject coverage.
  *
  * @packageDocumentation
  */
@@ -212,66 +235,135 @@ function findFileEntry(
 }
 
 /**
- * Compare a source function range to a coverage loc range using line+column
- * for precise containment checking.
- *
- * Returns:
- * -  1  if `loc` is fully contained within `fn` (fn.start <= loc.start AND
- *        fn.end >= loc.end, using line then column for tie-breaking)
- * -  0  if ranges are identical
- * - -1  if `loc` is NOT contained within `fn`
+ * Compare positions by line then column. Columns default to 0 when null,
+ * matching Istanbul's convention for end-of-line positions.
+ */
+function comparePositions(
+  aLine: number,
+  aColumn: number | null,
+  bLine: number,
+  bColumn: number | null,
+): number {
+  if (aLine !== bLine) {
+    return aLine - bLine;
+  }
+  return (aColumn ?? 0) - (bColumn ?? 0);
+}
+
+/**
+ * Test whether `loc` (an Istanbul range) is fully contained within the
+ * source function `fn`'s line+column range.
  */
 function locContainedInFn(
   fn: FunctionInfo,
   locStart: Position,
   locEnd: Position,
 ): boolean {
-  // Start check: fn.start must be <= loc.start (line, then column)
-  const startLineOk = fn.startLine < locStart.line ||
-    (fn.startLine === locStart.line &&
-      fn.startColumn <= (locStart.column ?? 0));
-  // End check: fn.end must be >= loc.end (line, then column)
-  const endLineOk = fn.endLine > locEnd.line ||
-    (fn.endLine === locEnd.line &&
-      fn.endColumn >= (locEnd.column ?? 0));
-  return startLineOk && endLineOk;
+  const startOk =
+    comparePositions(fn.startLine, fn.startColumn, locStart.line, locStart.column) <= 0;
+  const endOk =
+    comparePositions(fn.endLine, fn.endColumn, locEnd.line, locEnd.column) >= 0;
+  return startOk && endOk;
 }
 
 /**
- * Check whether a statement range is contained within the function's
- * line+column source range.
+ * Compute a total ordering size for a function range for "most specific"
+ * comparisons: smaller size = more specific. The size is line-dominant with a
+ * column tiebreak, scaled to keep the column component below one line of
+ * resolution.
  */
-function statementContainedInFn(
-  fn: FunctionInfo,
+function fnRangeSize(fn: FunctionInfo): number {
+  const lineSpan = (fn.endLine - fn.startLine) * 100000;
+  const colSpan = fn.endColumn - fn.startColumn;
+  return lineSpan + colSpan;
+}
+
+/**
+ * Find the uniquely most-specific source function that contains `loc`.
+ *
+ * "Most specific" = the function with the smallest line+column source range
+ * that contains the loc. Ties (two or more candidates with equal range size)
+ * are ambiguous: the entry is assigned to none (returns null).
+ */
+function mostSpecificContainer(
+  fns: FunctionInfo[],
+  locStart: Position,
+  locEnd: Position,
+): number | null {
+  let bestIdx: number | null = null;
+  let bestSize = Infinity;
+  for (let i = 0; i < fns.length; i++) {
+    const fn = fns[i];
+    if (fn === undefined) {
+      continue;
+    }
+    if (locContainedInFn(fn, locStart, locEnd)) {
+      const size = fnRangeSize(fn);
+      if (size < bestSize) {
+        bestSize = size;
+        bestIdx = i;
+      } else if (size === bestSize) {
+        // Ambiguous tie: assign to none.
+        bestIdx = null;
+      }
+    }
+  }
+  return bestIdx;
+}
+
+/**
+ * Find the uniquely most-specific **matched** source function that contains
+ * a statement's line+column range. Same tie-rejection rule as
+ * {@link mostSpecificContainer}, but only considers functions that already
+ * have a valid coverage identity (an assigned fnMap entry).
+ */
+function mostSpecificMatchedContainer(
+  fns: FunctionInfo[],
+  matchedFlags: boolean[],
   stmtStart: Position,
   stmtEnd: Position,
-): boolean {
-  return locContainedInFn(fn, stmtStart, stmtEnd);
+): number | null {
+  let bestIdx: number | null = null;
+  let bestSize = Infinity;
+  for (let i = 0; i < fns.length; i++) {
+    const fn = fns[i];
+    if (fn === undefined || !matchedFlags[i]) {
+      continue;
+    }
+    if (locContainedInFn(fn, stmtStart, stmtEnd)) {
+      const size = fnRangeSize(fn);
+      if (size < bestSize) {
+        bestSize = size;
+        bestIdx = i;
+      } else if (size === bestSize) {
+        // Ambiguous tie: this statement is owned by none.
+        bestIdx = null;
+      }
+    }
+  }
+  return bestIdx;
 }
 
 /**
- * Map a single function to its coverage using:
- * 1. Identity association via fnMap containment (most-specific matching loc).
- * 2. Coverage fraction from statementMap/s counts within the function's range.
+ * Map coverage for ALL functions in a single source file against a single
+ * Istanbul file entry, performing the per-file ownership assignment.
  *
- * The fnMap is used only to confirm the function has a coverage identity
- * (matched: true/false). Coverage value is always derived from statement
- * counts — never from the boolean `f[id] > 0` hit.
+ * This is the core algorithm:
+ * 1. Assign each fnMap entry to at most one source function (uniquely
+ *    most-specific container). A function with >=1 assigned entry is matched.
+ * 2. Assign each statement to at most one matched function (uniquely
+ *    most-specific matched container). Statements owned by an inner matched
+ *    function do not contribute to an outer matched parent.
+ * 3. Compute coverage fraction per function over its owned statements.
  *
- * If the file entry has no statementMap/s data, falls back to 0 coverage
- * with matched=true when a fnMap identity was found (but no statements to
- * measure), or matched=false when no identity was found.
+ * @returns coverage per function, preserving input order.
  */
-export function mapFunctionCoverage(
+export function mapFileCoverage(
   fileEntry: IstanbulFileEntry,
-  fn: FunctionInfo,
-): FunctionCoverage {
-  // --- Identity association via fnMap ---
-  // Find the most specific (smallest) loc contained within the function.
-  // This is the function's own loc, not a parent's or child's.
-  let identityMatched = false;
-  let bestKey: string | null = null;
-  let bestSize = Infinity; // smallest containing loc = most specific
+  fns: FunctionInfo[],
+): FunctionCoverage[] {
+  // Step 1: assign fnMap entries to source functions.
+  const matchedFlags = new Array<boolean>(fns.length).fill(false);
 
   for (const key of Object.keys(fileEntry.fnMap)) {
     const entry = fileEntry.fnMap[key];
@@ -280,99 +372,50 @@ export function mapFunctionCoverage(
     }
     const locStart = entry.loc.start;
     const locEnd = entry.loc.end;
-    if (locContainedInFn(fn, locStart, locEnd)) {
-      identityMatched = true;
-      const size =
-        (locEnd.line - locStart.line) * 100000 +
-        ((locEnd.column ?? 0) - (locStart.column ?? 0));
-      // Most specific = smallest containing loc.
-      if (size < bestSize) {
-        bestSize = size;
-        bestKey = key;
-      }
-      // Ties are acceptable here — both identify the same function equally;
-      // we only need identity confirmation, not a unique entry.
+    const idx = mostSpecificContainer(fns, locStart, locEnd);
+    if (idx !== null) {
+      matchedFlags[idx] = true;
     }
   }
 
-  // --- Coverage fraction from statementMap/s ---
+  // Step 2: assign statements to matched functions.
   const statementMap = fileEntry.statementMap;
   const s = fileEntry.s;
-  if (
-    statementMap === undefined ||
-    s === undefined ||
-    statementMap === null ||
-    s === null
-  ) {
-    // No statement-level data available. Report 0 coverage.
-    // matched=true only when a fnMap identity was found.
-    return {
-      functionInfo: fn,
-      coverage: 0,
-      matched: identityMatched,
-      totalStatements: 0,
-      coveredStatements: 0,
-    };
-  }
+  const totalStatements = new Array<number>(fns.length).fill(0);
+  const coveredStatements = new Array<number>(fns.length).fill(0);
 
-  let totalStatements = 0;
-  let coveredStatements = 0;
-
-  for (const key of Object.keys(statementMap)) {
-    const stmt = statementMap[key];
-    if (stmt === undefined) {
-      continue;
-    }
-    if (statementContainedInFn(fn, stmt.start, stmt.end)) {
-      totalStatements += 1;
-      const count = s[key];
-      if (count !== undefined && count > 0) {
-        coveredStatements += 1;
+  if (statementMap !== undefined && s !== undefined) {
+    for (const key of Object.keys(statementMap)) {
+      const stmt = statementMap[key];
+      if (stmt === undefined) {
+        continue;
+      }
+      const ownerIdx = mostSpecificMatchedContainer(
+        fns,
+        matchedFlags,
+        stmt.start,
+        stmt.end,
+      );
+      if (ownerIdx !== null) {
+        totalStatements[ownerIdx]! += 1;
+        const count = s[key];
+        if (count !== undefined && count > 0) {
+          coveredStatements[ownerIdx]! += 1;
+        }
       }
     }
   }
 
-  // No statements in the function's range: coverage 0.
-  // matched reflects whether we found the function in coverage at all.
-  const matched = identityMatched || totalStatements > 0;
-  if (totalStatements === 0) {
-    return {
-      functionInfo: fn,
-      coverage: 0,
-      matched,
-      totalStatements: 0,
-      coveredStatements: 0,
-    };
-  }
-
-  const coverage = coveredStatements / totalStatements;
-  return {
-    functionInfo: fn,
-    coverage,
-    matched,
-    totalStatements,
-    coveredStatements,
-  };
-}
-
-/**
- * Map all functions to their coverage, grouped by file.
- *
- * Functions whose source file has no coverage entry report coverage 0
- * (matched: false). Functions are never dropped from the result.
- *
- * @param functions  - all discovered functions (from complexity analysis)
- * @param coverage  - parsed Istanbul coverage-final.json
- * @returns coverage per function, preserving input order
- */
-export function mapAllCoverage(
-  functions: FunctionInfo[],
-  coverage: IstanbulCoverage,
-): FunctionCoverage[] {
+  // Step 3: build results.
   const results: FunctionCoverage[] = [];
-  for (const fn of functions) {
-    const fileEntry = findFileEntry(coverage, fn.filePath);
-    if (fileEntry === null) {
+  for (let i = 0; i < fns.length; i++) {
+    const fn = fns[i]!;
+    const matched = matchedFlags[i]!;
+    const total = totalStatements[i]!;
+    const covered = coveredStatements[i]!;
+    if (!matched) {
+      // Unmatched: identity false. A statement alone never marks a function
+      // matched. Coverage 0, zero statements.
       results.push({
         functionInfo: fn,
         coverage: 0,
@@ -382,7 +425,87 @@ export function mapAllCoverage(
       });
       continue;
     }
-    results.push(mapFunctionCoverage(fileEntry, fn));
+    const coverage = total > 0 ? covered / total : 0;
+    results.push({
+      functionInfo: fn,
+      coverage,
+      matched: true,
+      totalStatements: total,
+      coveredStatements: covered,
+    });
   }
   return results;
+}
+
+/**
+ * Map a single function to its coverage.
+ *
+ * This is a convenience wrapper around {@link mapFileCoverage} for the
+ * single-function case. Callers that map many functions in the same file
+ * should use {@link mapFileCoverage} (via {@link mapAllCoverage}) so that
+ * per-file ownership is computed once over all functions together.
+ */
+export function mapFunctionCoverage(
+  fileEntry: IstanbulFileEntry,
+  fn: FunctionInfo,
+): FunctionCoverage {
+  return mapFileCoverage(fileEntry, [fn])[0]!;
+}
+
+/**
+ * Map all functions to their coverage, grouped by file.
+ *
+ * Functions are grouped by their source file, and each group is mapped with
+ * {@link mapFileCoverage} so that per-file ownership assignment is computed
+ * over all functions in that file together. Functions whose source file has
+ * no coverage entry report coverage 0 (matched: false). Functions are never
+ * dropped from the result.
+ *
+ * @param functions  - all discovered functions (from complexity analysis)
+ * @param coverage  - parsed Istanbul coverage-final.json
+ * @returns coverage per function, preserving input order
+ */
+export function mapAllCoverage(
+  functions: FunctionInfo[],
+  coverage: IstanbulCoverage,
+): FunctionCoverage[] {
+  // Group function indices by file path for per-file ownership assignment.
+  const byFile = new Map<string, { fn: FunctionInfo; index: number }[]>();
+  for (let i = 0; i < functions.length; i++) {
+    const fn = functions[i]!;
+    let group = byFile.get(fn.filePath);
+    if (group === undefined) {
+      group = [];
+      byFile.set(fn.filePath, group);
+    }
+    group.push({ fn, index: i });
+  }
+
+  const results: (FunctionCoverage | undefined)[] = new Array(functions.length).fill(
+    undefined,
+  );
+
+  for (const [filePath, group] of byFile) {
+    const fileEntry = findFileEntry(coverage, filePath);
+    if (fileEntry === null) {
+      for (const { fn, index } of group) {
+        results[index] = {
+          functionInfo: fn,
+          coverage: 0,
+          matched: false,
+          totalStatements: 0,
+          coveredStatements: 0,
+        };
+      }
+      continue;
+    }
+    const fns = group.map((g) => g.fn);
+    const fileResults = mapFileCoverage(fileEntry, fns);
+    for (let j = 0; j < group.length; j++) {
+      const index = group[j]!.index;
+      results[index] = fileResults[j];
+    }
+  }
+
+  return results as FunctionCoverage[];
 }
