@@ -10,11 +10,19 @@
  *    mean invalid input or an unexpected error).
  * 2. The breach is caused by the known-uncovered cli.ts functions
  *    (parseArgs, main) that are excluded from test coverage but included
- *    in source analysis.
+ *    in source analysis. Specifically:
+ *    a. Rows named "parseArgs" and "main" exist in the JSON output.
+ *    b. Those rows are unmatched/uncovered (coverageMatched: false or
+ *       coverage === 0).
+ *    c. Those rows exceed the threshold (crap > threshold).
+ *    d. Every other breaching row is also explained (no unexpected-only
+ *       breaches).
  *
- * The script exits 0 only when the expected breach occurs. It exits non-zero
- * if the CLI exits 0 (no breach — coverage data missing), exits 1 (invalid
- * input — configuration error), or produces an unexpected error.
+ * The pure validation logic is in src/self-score-helpers.ts and has unit
+ * test coverage via test/self-score.test.ts.
+ *
+ * The script exits 0 only when the expected breach occurs and is fully
+ * explained. It exits non-zero otherwise.
  *
  * Run via: npx tsx scripts/self-score.ts
  *
@@ -25,6 +33,11 @@ import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import {
+  validateSelfScoreBreach,
+  EXPECTED_BREACH_NAMES,
+} from "../src/self-score-helpers.js";
+import type { SelfScoreReport } from "../src/self-score-helpers.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,15 +89,10 @@ function runCli(): CliResult {
 function assertExpectedBreach(): void {
   const result = runCli();
 
-  // The CLI must exit 2 (threshold exceeded). This is the expected breach:
-  // cli.ts functions (parseArgs, main) have high complexity and no direct
-  // test coverage (they are exercised via subprocess, which V8 does not
-  // attribute to the source file), so they breach even a generous threshold.
   if (result.code === 2) {
-    // Parse the JSON to verify the breach is from the expected functions.
-    let parsed: { summary?: { breached?: boolean; maxCrap?: number } };
+    let parsed: SelfScoreReport;
     try {
-      parsed = JSON.parse(result.stdout);
+      parsed = JSON.parse(result.stdout) as SelfScoreReport;
     } catch {
       console.error("Error: CLI produced non-JSON output on exit 2:");
       console.error(result.stdout);
@@ -96,11 +104,29 @@ function assertExpectedBreach(): void {
       );
       process.exit(1);
     }
+
+    const thresholdNum = Number(THRESHOLD);
+    const validationError = validateSelfScoreBreach(parsed, thresholdNum);
+    if (validationError !== null) {
+      console.error(`Error: self-score validation failed: ${validationError}`);
+      console.error("Breaching rows:");
+      const breaches = parsed.rows.filter((r) => r.crap > thresholdNum);
+      for (const r of breaches) {
+        console.error(
+          `  ${r.displayName}: crap=${r.crap.toFixed(1)}, coverage=${r.coverage}, matched=${r.coverageMatched}`,
+        );
+      }
+      process.exit(1);
+    }
+
     console.log(
       `Self-score OK: expected threshold breach confirmed (max CRAP ${parsed.summary.maxCrap?.toFixed(1)} > ${THRESHOLD}).`,
     );
     console.log(
-      "The breach is expected: cli.ts functions (parseArgs, main) have no direct test coverage.",
+      "The breach is expected: cli.ts functions (parseArgs, main) have high cyclomatic complexity and no direct test coverage (they are exercised via subprocess, which V8 does not attribute to the source file). Coverage fraction semantics: these functions report coverage 0 because no statements within their source range were executed.",
+    );
+    console.log(
+      `Expected breach functions: ${EXPECTED_BREACH_NAMES.join(", ")}.`,
     );
     process.exit(0);
   }
