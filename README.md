@@ -257,8 +257,21 @@ jobs:
       - run: npm run typecheck
       - run: npm run coverage
       - run: npm run build
+      - name: CRAP report (threshold 8; report-only)
+        run: |
+          # Append the built CLI's human-readable report to $GITHUB_STEP_SUMMARY.
+          # Exit 2 is accepted only as the expected report-only threshold breach;
+          # every other nonzero exit fails the job.
+          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8
       - run: npm run self-score
 ```
+
+The CLI's default threshold is **8**. Temporarily, CI publishes the built
+CLI's threshold-8 own-source report to the GitHub Job Summary but does not
+fail the job for its expected exit code 2. The summary explicitly marks these
+violations as report-only. This visibility period is temporary: eventual
+threshold-8 enforcement requires remediation (coverage and/or refactoring),
+not silently raising the default threshold.
 
 The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the CLI
 from source against this repo's own `src/` directory using the coverage

@@ -29,6 +29,34 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: CRAP report (threshold 8; report-only)
+        shell: bash
+        run: |
+          {
+            echo "## CRAP report (threshold 8; report-only)"
+            echo
+            echo "> ⚠️ **Temporary policy:** CRAP violations above the default threshold of 8 are reported, not enforced. The self-score audit below uses a temporary threshold of 30 while the CLI is refactored."
+            echo
+            echo '```text'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          set +e
+          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 >> "$GITHUB_STEP_SUMMARY" 2>&1
+          status=$?
+          set -e
+
+          {
+            echo '```'
+            echo
+            if [[ "$status" -eq 2 ]]; then
+              echo "> ℹ️ The threshold-8 report exited 2 as expected; violations are report-only for now."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$status" -ne 0 && "$status" -ne 2 ]]; then
+            exit "$status"
+          fi
+
       - name: Self-score (assert expected threshold breach)
         run: npm run self-score
         # The self-score script (scripts/self-score.ts, run via tsx) asserts
