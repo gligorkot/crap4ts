@@ -30,11 +30,12 @@ function runCli(
   cwd: string,
   args: string[],
   dist = false,
+  cliPath = CLI_DIST,
 ): { stdout: string; stderr: string; code: number } {
   try {
     const stdout = execFileSync(
       dist ? process.execPath : "npx",
-      dist ? [CLI_DIST, ...args] : ["tsx", CLI_SOURCE, ...args],
+      dist ? [cliPath, ...args] : ["tsx", CLI_SOURCE, ...args],
       { cwd, encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"] },
     );
     return { stdout, stderr: "", code: 0 };
@@ -75,6 +76,28 @@ describe("configuration", () => {
     expect(() => defineConfig({ version: 1, src: "src", unknown: true } as never)).toThrow("unknown property");
     fs.writeFileSync(path.join(project, ".crap4tsrc.json"), JSON.stringify(config));
     expect((await loadConfig(project))?.config.threshold).toBe(8);
+  });
+
+  it("loads the README TypeScript defineConfig import from a packed installed package", () => {
+    const project = tempProject();
+    const packageRoot = path.resolve(__dirname, "..");
+    const packed = execFileSync("npm", ["pack", "--pack-destination", project], {
+      cwd: packageRoot, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", path.join(project, packed)], {
+      cwd: project, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+    });
+    fs.writeFileSync(path.join(project, "crap4ts.config.ts"), [
+      'import { defineConfig } from "crap4ts";',
+      "",
+      "export default defineConfig({ version: 1, src: 'src', threshold: 100 });",
+      "",
+    ].join("\n"));
+
+    const installedCli = path.join(project, "node_modules", "crap4ts", "dist", "cli.js");
+    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true, installedCli);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
   });
 
   it("uses an ESM .mjs config through the built CLI in a CommonJS project", () => {
