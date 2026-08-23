@@ -25,6 +25,10 @@ export interface FunctionInfo {
   readonly startLine: number;
   /** 1-based end line of the function (closing brace / last token). */
   readonly endLine: number;
+  /** 0-based start column within the start line. */
+  readonly startColumn: number;
+  /** 0-based end column within the end line (exclusive). */
+  readonly endColumn: number;
   /** 0-based start offset within the source file. */
   readonly startOffset: number;
   /** 0-based end offset (exclusive) within the source file. */
@@ -160,14 +164,17 @@ function isFunctionLike(node: ts.Node): boolean {
  * - Constructors use the enclosing class name + `#ctor`.
  * - Anonymous arrow/function expressions assigned to a variable use the
  *   variable name (inferred from the parent `VariableDeclaration`).
+ * - Anonymous function expressions used as object property values use the
+ *   property name (inferred from the parent `PropertyAssignment` or
+ *   `PropertyDeclaration`).
  * - Otherwise `<anonymous>`.
  */
 function functionName(node: ts.Node): { name: string; displayName: string } {
   switch (node.kind) {
-    case ts.SyntaxKind.FunctionDeclaration:
-    case ts.SyntaxKind.FunctionExpression: {
-      const decl = node as ts.FunctionDeclaration | ts.FunctionExpression;
-      return { name: decl.name?.text ?? "<anonymous>", displayName: decl.name?.text ?? "<anonymous>" };
+    case ts.SyntaxKind.FunctionDeclaration: {
+      const decl = node as ts.FunctionDeclaration;
+      const name = decl.name?.text ?? "<anonymous>";
+      return { name, displayName: name };
     }
     case ts.SyntaxKind.MethodDeclaration: {
       const decl = node as ts.MethodDeclaration;
@@ -189,10 +196,9 @@ function functionName(node: ts.Node): { name: string; displayName: string } {
       return { name: "constructor", displayName: `${className}#ctor` };
     }
     case ts.SyntaxKind.ArrowFunction:
-    case ts.SyntaxKind.FunctionExpression: {
-      // handled in default path below via parent
+    case ts.SyntaxKind.FunctionExpression:
+      // handled below via parent inference
       break;
-    }
     default:
       break;
   }
@@ -203,7 +209,13 @@ function functionName(node: ts.Node): { name: string; displayName: string } {
       return { name: parent.name.text, displayName: parent.name.text };
     }
   }
+  // PropertyAssignment: `obj = { foo: function() {} }` — name is "foo".
   if (parent && ts.isPropertyAssignment(parent) && parent.name) {
+    const name = parent.name.getText();
+    return { name, displayName: name };
+  }
+  // PropertyDeclaration: `class C { foo = () => {} }` — name is "foo".
+  if (parent && ts.isPropertyDeclaration(parent) && parent.name) {
     const name = parent.name.getText();
     return { name, displayName: name };
   }
@@ -250,14 +262,20 @@ export function analyzeSource(
       const name = functionName(node);
       const start = node.getStart(sourceFile);
       const end = node.getEnd();
-      const startLine = sourceFile.getLineAndCharacterOfPosition(start).line + 1;
-      const endLine = sourceFile.getLineAndCharacterOfPosition(end).line + 1;
+      const startPos = sourceFile.getLineAndCharacterOfPosition(start);
+      const endPos = sourceFile.getLineAndCharacterOfPosition(end);
+      const startLine = startPos.line + 1;
+      const endLine = endPos.line + 1;
+      const startColumn = startPos.character;
+      const endColumn = endPos.character;
       const complexity = cyclomaticComplexity(node);
       functions.push({
         name: name.name,
         displayName: name.displayName,
         startLine,
         endLine,
+        startColumn,
+        endColumn,
         startOffset: start,
         endOffset: end,
         complexity,
