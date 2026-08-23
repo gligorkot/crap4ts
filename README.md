@@ -114,11 +114,15 @@ npx crap4ts src --coverage coverage/coverage-final.json
    containing loc). This is used only for identity association.
 
    **Coverage fraction semantics**: Coverage is derived from Istanbul
-   `statementMap` / `s` data — the fraction of statements whose ranges fall
-   within the function's line+column source range that were executed at least
-   once. This is `coveredStatements / totalStatements`, a per-function covered
-   fraction over a meaningful execution denominator. This mirrors the core
-   invariant of the reference implementations:
+   `statementMap` / `s` data — the fraction of statements whose ranges are
+   owned by the function that were executed at least once. Statement
+   ownership is determined per file: each statement's most-specific owning
+   source function is found across ALL source functions (exact range
+   containment, not a numeric heuristic), and if that owner is matched, the
+   statement is credited to it; if the owner is unmatched or ambiguous, the
+   statement is excluded entirely — it never falls through to a parent. This
+   is `coveredStatements / totalStatements`, a per-function covered fraction
+   over a meaningful execution denominator. This mirrors the core invariant of the reference implementations:
    - **Java/JaCoCo**: covered instructions / total instructions per method
    - **Go**: covered coverage statements / total statements in the function
      line range
