@@ -23,8 +23,24 @@
       "1": 0,
       "2": 3
     },
-    "statementMap": {},
-    "s": {},
+    "statementMap": {
+      "0": { "start": { "line": 3, "column": 24 }, "end": { "line": 4, "column": 0 } },
+      "1": { "start": { "line": 4, "column": 2 }, "end": { "line": 4, "column": 10 } },
+      "2": { "start": { "line": 6, "column": 32 }, "end": { "line": 7, "column": 0 } },
+      "3": { "start": { "line": 7, "column": 4 }, "end": { "line": 7, "column": 12 } },
+      "4": { "start": { "line": 8, "column": 4 }, "end": { "line": 8, "column": 12 } },
+      "5": { "start": { "line": 9, "column": 2 }, "end": { "line": 9, "column": 10 } },
+      "6": { "start": { "line": 11, "column": 28 }, "end": { "line": 11, "column": 40 } }
+    },
+    "s": {
+      "0": 5,
+      "1": 5,
+      "2": 0,
+      "3": 0,
+      "4": 0,
+      "5": 0,
+      "6": 3
+    },
     "b": {},
     "branchMap": {},
     "meta": {}

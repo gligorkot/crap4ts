@@ -23,7 +23,8 @@ export interface ReportRow {
   readonly coverage: number;
   readonly crap: number;
   readonly coverageMatched: boolean;
-  readonly executionCount: number;
+  readonly totalStatements: number;
+  readonly coveredStatements: number;
 }
 
 /**
@@ -60,7 +61,8 @@ export function buildReportRows(
       coverage: fc.coverage,
       crap: result.crap,
       coverageMatched: fc.matched,
-      executionCount: fc.count,
+      totalStatements: fc.totalStatements,
+      coveredStatements: fc.coveredStatements,
     });
   }
   return rows;
