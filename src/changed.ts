@@ -37,20 +37,28 @@ const runGit: GitRunner = (args, cwd) => execFileSync("git", args, {
  * Resolve a ref and collect committed HEAD changes since its merge base.
  *
  * Git is always invoked with argument arrays; ref and path values never enter a
- * shell. The resulting paths are absolute paths rooted under `cwd`.
+ * shell. Git path output is repository-root-relative, so the resulting paths
+ * are absolute paths rooted under the repository top-level rather than `cwd`.
  */
 export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner = runGit): ChangedFiles {
+  const projectRoot = runRequiredGit(
+    runner,
+    ["rev-parse", "--show-toplevel"],
+    cwd,
+    "cannot determine the Git repository root",
+  ).trim();
+  if (projectRoot.length === 0) throw new GitInputError("cannot determine the Git repository root; git returned no path");
   const resolvedRef = runRequiredGit(
     runner,
     ["rev-parse", "--verify", `${ref}^{commit}`],
-    cwd,
+    projectRoot,
     `cannot resolve git ref "${ref}"; use a commit, branch, tag, or remote-tracking ref available locally`,
   ).trim();
   if (resolvedRef.length === 0) throw new GitInputError(`cannot resolve git ref "${ref}"; git returned no commit`);
   const mergeBase = runRequiredGit(
     runner,
     ["merge-base", resolvedRef, "HEAD"],
-    cwd,
+    projectRoot,
     `cannot find a merge base between "${ref}" and HEAD; fetch the base ref or use a related ref`,
   ).trim();
   if (mergeBase.length === 0) throw new GitInputError(`cannot find a merge base between "${ref}" and HEAD`);
@@ -58,27 +66,35 @@ export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner 
   const status = runRequiredGit(
     runner,
     ["diff", "--name-status", "-z", "--find-renames", mergeBase, "HEAD"],
-    cwd,
+    projectRoot,
     "cannot determine changed files from git",
   );
   const files = new Map<string, ChangedFile>();
   for (const change of parseNameStatus(status)) {
     if (change.status === "D") continue;
-    const absolute = toProjectPath(cwd, change.path);
+    const absolute = toProjectPath(projectRoot, change.path);
     if (absolute === null) continue;
     if (change.status === "A") {
       files.set(absolute, { kind: "all" });
       continue;
     }
     if (change.status === "R") {
-      // A pure rename has no changed source lines. Do not broaden it to a full file.
-      files.set(absolute, { kind: "ranges", ranges: [] });
+      if (change.score === 100) {
+        // Only Git's R100 status guarantees that the destination has no changed
+        // source lines. Do not broaden a pure rename to a full file.
+        files.set(absolute, { kind: "ranges", ranges: [] });
+      } else {
+        // An edited rename has a destination-side change. Selecting every
+        // destination function is conservative and avoids silently dropping a
+        // change if a patch cannot be attributed to a function range.
+        files.set(absolute, { kind: "all" });
+      }
       continue;
     }
     const patch = runRequiredGit(
       runner,
       ["diff", "--no-ext-diff", "--no-color", "--unified=0", mergeBase, "HEAD", "--", change.path],
-      cwd,
+      projectRoot,
       `cannot determine changed lines for ${change.path}`,
     );
     files.set(absolute, { kind: "ranges", ranges: parseNewLineRanges(patch) });
@@ -123,6 +139,7 @@ function runRequiredGit(runner: GitRunner, args: readonly string[], cwd: string,
 
 interface NameStatus {
   readonly status: "A" | "M" | "R" | "D" | "C" | "T";
+  readonly score?: number;
   readonly path: string;
 }
 
@@ -141,10 +158,11 @@ function parseNameStatus(output: string): NameStatus[] {
       throw new GitInputError(`cannot parse git changed-file status "${rawStatus}"`);
     }
     if (status === "R" || status === "C") {
+      const score = parseRenameScore(rawStatus);
       index++; // old path
       const newPath = parts[index++];
       if (newPath === undefined) throw new GitInputError("cannot parse renamed git path");
-      changes.push({ status, path: newPath });
+      changes.push({ status, score, path: newPath });
     } else {
       const changedPath = parts[index++];
       if (changedPath === undefined) throw new GitInputError("cannot parse git changed-file path");
@@ -152,6 +170,16 @@ function parseNameStatus(output: string): NameStatus[] {
     }
   }
   return changes;
+}
+
+function parseRenameScore(rawStatus: string): number {
+  const scoreText = rawStatus.slice(1);
+  if (!/^\d+$/.test(scoreText)) throw new GitInputError(`cannot parse git rename score "${rawStatus}"`);
+  const score = Number(scoreText);
+  if (!Number.isSafeInteger(score) || score < 0 || score > 100) {
+    throw new GitInputError(`cannot parse git rename score "${rawStatus}"`);
+  }
+  return score;
 }
 
 function toProjectPath(cwd: string, relativePath: string): string | null {

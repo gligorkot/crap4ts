@@ -165,8 +165,10 @@ intentional: nested functions and their statements retain the same ownership
 rules as a full report. Added files select all their functions. Deleted files
 have no current source to score and are ignored. Pure renames and binary/no-hunk
 changes select no functions; they never expand to a full-file or full-repository
-scan. A deletion hunk uses its new-file insertion boundary as its deterministic
-line location.
+scan. An edited rename (Git `R<100`) conservatively selects all functions in its
+destination file, while only Git `R100` is treated as a pure rename with no
+eligible functions. A deletion hunk uses its new-file insertion boundary as its
+deterministic line location.
 
 ```sh
 # Local branch compared with locally available main
@@ -190,7 +192,8 @@ unstaged, or untracked `.ts`/`.tsx` worktree files (exit 1); commit or stash
 those files first. Non-TypeScript worktree files do not affect selection.
 Generated files remain subject to normal exclusions/config exclusions, so their
 changes can yield no eligible rows. Rename detection is used for safe path
-handling, but a rename without content hunks does not create a CRAP obligation.
+handling: an `R100` rename without content changes does not create a CRAP
+obligation, while an edited rename is conservatively included.
 
 Roll out deliberately: first run the JSON command as informational CI output,
 inspect `filter` metadata and coverage matches, then enable the threshold gate

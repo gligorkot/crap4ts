@@ -20,6 +20,7 @@ describe("collectChangedFiles", () => {
   it("uses the merge-base of the ref and HEAD, parses NUL paths, and records added lines", () => {
     const cwd = "/project";
     const runner = gitResponses(new Map([
+      [["rev-parse", "--show-toplevel"].join("\u0000"), "/project\n"],
       [["rev-parse", "--verify", "origin/main^{commit}"].join("\u0000"), "base-ref\n"],
       [["merge-base", "base-ref", "HEAD"].join("\u0000"), "merge-base\n"],
       [["diff", "--name-status", "-z", "--find-renames", "merge-base", "HEAD"].join("\u0000"), "M\0src/has space.ts\0A\0src/new.ts\0D\0src/removed.ts\0R100\0src/old.ts\0src/renamed.ts\0"],
@@ -37,6 +38,7 @@ describe("collectChangedFiles", () => {
 
   it("treats zero-length new hunks as deterministic changed-line boundaries", () => {
     const runner = gitResponses(new Map([
+      [["rev-parse", "--show-toplevel"].join("\u0000"), "/project\n"],
       [["rev-parse", "--verify", "main^{commit}"].join("\u0000"), "main-sha\n"],
       [["merge-base", "main-sha", "HEAD"].join("\u0000"), "merge-base\n"],
       [["diff", "--name-status", "-z", "--find-renames", "merge-base", "HEAD"].join("\u0000"), "M\0src/a.ts\0"],
@@ -47,7 +49,10 @@ describe("collectChangedFiles", () => {
   });
 
   it("reports unavailable refs and merge bases as actionable input errors", () => {
-    const refFailure: GitRunner = () => { throw new Error("fatal: Needed a single revision"); };
+    const refFailure: GitRunner = (args) => {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return "/project\n";
+      throw new Error("fatal: Needed a single revision");
+    };
     expect(() => collectChangedFiles("missing", "/project", refFailure)).toThrow(GitInputError);
     expect(() => collectChangedFiles("missing", "/project", refFailure)).toThrow(/cannot resolve git ref/);
 
