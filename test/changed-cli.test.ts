@@ -64,6 +64,60 @@ describe("changed-only CLI", () => {
     expect(report.rows.map((row: { name: string }) => row.name)).toEqual(["changed"]);
   });
 
+  it("keeps an unchanged nested function's statements out of a changed outer function", () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "crap4ts-changed-nested-"));
+    projects.push(project);
+    run("git", ["init", "--initial-branch=main"], project);
+    run("git", ["config", "user.email", "test@example.invalid"], project);
+    run("git", ["config", "user.name", "Test"], project);
+    fs.mkdirSync(path.join(project, "src"));
+    const sourcePath = path.join(project, "src", "nested.ts");
+    const base = [
+      "export function outer(): number {",
+      "  const nested = (): number => {",
+      "    return 7;",
+      "  };",
+      "  return nested() + 0;",
+      "}",
+      "",
+    ].join("\n");
+    fs.writeFileSync(sourcePath, base);
+    fs.writeFileSync(path.join(project, "coverage.json"), JSON.stringify({
+      [sourcePath]: {
+        path: sourcePath,
+        fnMap: {
+          "0": { name: "outer", decl: { start: { line: 1, column: 16 }, end: { line: 1, column: 21 } }, loc: { start: { line: 1, column: 0 }, end: { line: 6, column: 1 } } },
+          "1": { name: "nested", decl: { start: { line: 2, column: 8 }, end: { line: 2, column: 14 } }, loc: { start: { line: 2, column: 17 }, end: { line: 4, column: 3 } } },
+        },
+        f: { "0": 1, "1": 0 },
+        statementMap: {
+          "0": { start: { line: 3, column: 4 }, end: { line: 3, column: 13 } },
+          "1": { start: { line: 5, column: 2 }, end: { line: 5, column: 22 } },
+        },
+        s: { "0": 0, "1": 1 },
+      },
+    }));
+    run("git", ["add", "."], project);
+    run("git", ["commit", "-m", "base"], project);
+    run("git", ["checkout", "-b", "feature"], project);
+    fs.writeFileSync(sourcePath, base.replace("+ 0", "+ 1"));
+    run("git", ["add", "."], project);
+    run("git", ["commit", "-m", "change outer"], project);
+
+    const result = runCli(project, ["src", "--coverage", "coverage.json", "--changed-since", "main", "--threshold", "100", "--json"]);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.filter).toMatchObject({ mode: "changed", changedSince: "main" });
+    expect(report.rows).toHaveLength(1);
+    expect(report.rows[0]).toMatchObject({
+      name: "outer",
+      totalStatements: 1,
+      coveredStatements: 1,
+      coverage: 1,
+    });
+  });
+
   it("uses an explicit changed-since value over config and reports no eligible changed functions honestly", () => {
     const project = projectWithChangedFunction();
     fs.writeFileSync(path.join(project, ".crap4tsrc.json"), JSON.stringify({

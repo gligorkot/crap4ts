@@ -146,14 +146,22 @@ async function main(): Promise<void> {
     process.stderr.write(`Error: ${(error as Error).message}\n`);
     process.exit(EXIT_INVALID_INPUT);
   }
+  // Changed-only mode still maps every function in each changed file before
+  // selecting rows. Per-file mapping needs unchanged nested siblings to retain
+  // statement ownership rather than letting their statements fall through to a
+  // changed parent.
   const functions = analyzeFiles(changedFiles);
   const eligibleFunctions = changed === undefined ? functions : changedFunctionFilter(functions, changed.files);
-  if (eligibleFunctions.length === 0) {
+  const allFunctionCoverage = mapAllCoverage(functions, coverage);
+  const eligibleFunctionSet = new Set(eligibleFunctions);
+  const functionCoverage = changed === undefined
+    ? allFunctionCoverage
+    : allFunctionCoverage.filter(({ functionInfo }) => eligibleFunctionSet.has(functionInfo));
+  if (functionCoverage.length === 0) {
     const report = buildReport([], defaultThreshold, undefined, filter);
     process.stdout.write((args.json ? renderJsonReport(report) : renderHumanReport(report)) + "\n");
     process.exit(0);
   }
-  const functionCoverage = mapAllCoverage(eligibleFunctions, coverage);
   const report = buildReport(
     functionCoverage,
     defaultThreshold,
