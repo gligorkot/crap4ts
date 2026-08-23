@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -48,6 +48,12 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+beforeAll(() => {
+  execFileSync("npm", ["run", "build"], {
+    cwd: path.resolve(__dirname, ".."), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+  });
+});
+
 describe("configuration", () => {
   it("validates defineConfig and applies deterministic path matching directly", async () => {
     const project = tempProject();
@@ -71,13 +77,34 @@ describe("configuration", () => {
     expect((await loadConfig(project))?.config.threshold).toBe(8);
   });
 
-  it("discovers config files in TS, JS, then JSON precedence", () => {
+  it("uses an ESM .mjs config through the built CLI in a CommonJS project", () => {
+    const project = tempProject();
+    fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ type: "commonjs" }));
+    fs.writeFileSync(path.join(project, "crap4ts.config.mjs"), "export default { version: 1, src: 'src', threshold: 100 };\n");
+
+    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
+  });
+
+  it("uses a CommonJS .cjs config through the built CLI", () => {
+    const project = tempProject();
+    fs.writeFileSync(path.join(project, "crap4ts.config.cjs"), "module.exports = { version: 1, src: 'src', threshold: 100 };\n");
+
+    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
+  });
+
+  it("discovers config files in TS, MJS, CJS, JS, then JSON precedence", () => {
     const project = tempProject();
     fs.writeFileSync(path.join(project, ".crap4tsrc.json"), JSON.stringify({ version: 1, src: "src", threshold: 100 }));
     fs.writeFileSync(path.join(project, "crap4ts.config.js"), "export default { version: 1, src: 'src', threshold: 50 };\n");
+    fs.writeFileSync(path.join(project, "crap4ts.config.cjs"), "module.exports = { version: 1, src: 'src', threshold: 40 };\n");
+    fs.writeFileSync(path.join(project, "crap4ts.config.mjs"), "export default { version: 1, src: 'src', threshold: 30 };\n");
     fs.writeFileSync(path.join(project, "crap4ts.config.ts"), "export default { version: 1, src: 'src', threshold: 1 };\n");
 
-    const result = runCli(project, ["--coverage", "coverage.json", "--json"]);
+    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
     expect(result.code).toBe(2);
     expect(JSON.parse(result.stdout).summary.threshold).toBe(1);
   });
@@ -125,7 +152,24 @@ describe("configuration", () => {
       ],
     }));
 
-    const result = runCli(project, ["--coverage", "coverage.json", "--json"]);
+    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout).rows.every((row: { threshold: number }) => row.threshold === 1)).toBe(true);
+  });
+
+  it("prefers a literal over 101 fewer wildcards through the built CLI", () => {
+    const project = tempProject();
+    fs.writeFileSync(path.join(project, ".crap4tsrc.json"), JSON.stringify({
+      version: 1,
+      src: "src",
+      threshold: 100,
+      thresholds: [
+        { glob: `src/s${"*".repeat(102)}.ts`, threshold: 1 },
+        { glob: "src/*.ts", threshold: 100 },
+      ],
+    }));
+
+    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
     expect(result.code).toBe(2);
     expect(JSON.parse(result.stdout).rows.every((row: { threshold: number }) => row.threshold === 1)).toBe(true);
   });
@@ -155,15 +199,27 @@ describe("configuration", () => {
     expect(JSON.parse(result.stdout).rows.map((row: { filePath: string }) => row.filePath)).not.toContainEqual(expect.stringContaining("ignored.ts"));
   });
 
-  it("runs a TypeScript config through a clean built CLI without tsx", () => {
-    execFileSync("npm", ["run", "build"], {
-      cwd: path.resolve(__dirname, ".."), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-    });
+  it("loads a TypeScript config through the built CLI without writing beside it", () => {
     const project = tempProject();
     fs.writeFileSync(path.join(project, "crap4ts.config.ts"), "export default { version: 1, src: 'src', threshold: 100 };\n");
+    fs.chmodSync(project, 0o555);
+    try {
+      const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
+    } finally {
+      fs.chmodSync(project, 0o755);
+    }
+  });
 
-    const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
+  it("rejects empty, absolute, and project-escaping config src paths through the built CLI", () => {
+    for (const src of [[], "/tmp", "../outside", "src/../../outside"]) {
+      const project = tempProject();
+      fs.writeFileSync(path.join(project, ".crap4tsrc.json"), JSON.stringify({ version: 1, src }));
+
+      const result = runCli(project, ["--coverage", "coverage.json", "--json"], true);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("config.src");
+    }
   });
 });
