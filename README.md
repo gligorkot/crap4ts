@@ -110,14 +110,14 @@ long-lived `NPM_TOKEN` secret is stored in the repository.
 One-time setup required before the first automated publish works:
 
 1. Trusted publishing cannot perform the very first publish of a brand-new
-   package name. Do the initial publish manually once
-   (`npm publish --access public` from a checkout with publish rights to the
-   `@gligorkot` scope).
+   package name. From a checkout with publish rights to the `@gligorkot` scope,
+   run `npm ci && npm publish --access public`. The package `prepack` hook runs
+   the build before packaging, so the initial release cannot omit `dist/`.
 2. Then, on npmjs.com, configure the package `@gligorkot/crap4ts` as a
-   **trusted publisher**: bind it to the GitHub repository
-   `gligorkot/crap4ts`, the workflow filename `.github/workflows/publish.yml`,
-   and no environment. The workflow currently declares **no** GitHub Actions
-   environment, so leave npm's optional "Environment" field blank — a non-blank
+   **trusted publisher** with Organization/user `gligorkot`, Repository
+   `crap4ts`, Workflow filename `publish.yml` (filename only), and Allowed
+   actions `npm publish`. Leave npm's optional "Environment" field blank: this
+   workflow declares **no** GitHub Actions environment, so a non-blank
    environment would make OIDC claims mismatch and every publish fail. After
    that, the workflow's trusted-publisher OIDC flow handles all subsequent
    version publishes.

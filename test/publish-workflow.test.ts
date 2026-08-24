@@ -50,19 +50,21 @@ describe("package metadata", () => {
 
 describe("README publishing docs", () => {
   it("documents manual initial publish before trusted-publisher configuration", () => {
-    const manualIndex = readme.indexOf("initial publish manually once");
+    const manualIndex = readme.indexOf("npm ci && npm publish --access public");
     const trustedIndex = readme.indexOf("**trusted publisher**");
     expect(manualIndex).toBeGreaterThan(-1);
     expect(trustedIndex).toBeGreaterThan(manualIndex);
   });
 
-  it("documents the exact repository and workflow file", () => {
-    expect(readme).toContain("`gligorkot/crap4ts`");
-    expect(readme).toContain("`.github/workflows/publish.yml`");
+  it("documents the exact npm trusted-publisher fields", () => {
+    expect(readme).toContain("Organization/user `gligorkot`");
+    expect(readme).toContain("Repository\n   `crap4ts`");
+    expect(readme).toContain("Workflow filename `publish.yml` (filename only)");
+    expect(readme).toContain("Allowed\n   actions `npm publish`");
   });
 
   it("says to leave the optional environment blank because the workflow declares none", () => {
-    expect(readme).toMatch(/leave npm's optional "?Environment"? field blank/);
+    expect(readme).toContain("Leave npm's optional \"Environment\" field blank");
   });
 });
 
