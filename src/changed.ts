@@ -35,13 +35,24 @@ const runGit: GitRunner = (args, cwd) => execFileSync("git", args, {
 });
 
 /**
- * Resolve a ref and collect committed HEAD changes since its merge base.
- *
- * Git is always invoked with argument arrays; ref and path values never enter a
- * shell. Git path output is repository-root-relative, so the resulting paths
- * are absolute paths rooted under the repository top-level rather than `cwd`.
+ * The resolved inputs needed to collect changes since a ref: the repository
+ * root (where every git invocation must run) and the merge base of the
+ * ref's commit and HEAD (the diff anchor).
  */
-export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner = runGit): ChangedFiles {
+export interface ResolvedChangedRef {
+  readonly projectRoot: string;
+  readonly mergeBase: string;
+}
+
+/**
+ * Resolve a ref and the merge base between its commit and HEAD.
+ *
+ * Git is always invoked with argument arrays; the ref value never enters a
+ * shell. The repository root is resolved first because all subsequent git
+ * invocations run from it, so git path output is repository-root-relative
+ * rather than relative to `cwd`.
+ */
+export function resolveChangedRef(runner: GitRunner, ref: string, cwd: string): ResolvedChangedRef {
   const projectRoot = runRequiredGit(
     runner,
     ["rev-parse", "--show-toplevel"],
@@ -63,7 +74,18 @@ export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner 
     `cannot find a merge base between "${ref}" and HEAD; fetch the base ref or use a related ref`,
   ).trim();
   if (mergeBase.length === 0) throw new GitInputError(`cannot find a merge base between "${ref}" and HEAD`);
+  return { projectRoot, mergeBase };
+}
 
+/**
+ * Resolve a ref and collect committed HEAD changes since its merge base.
+ *
+ * Git is always invoked with argument arrays; ref and path values never enter a
+ * shell. Git path output is repository-root-relative, so the resulting paths
+ * are absolute paths rooted under the repository top-level rather than `cwd`.
+ */
+export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner = runGit): ChangedFiles {
+  const { projectRoot, mergeBase } = resolveChangedRef(runner, ref, cwd);
   const status = runRequiredGit(
     runner,
     ["diff", "--name-status", "-z", "--find-renames", mergeBase, "HEAD"],
@@ -75,30 +97,7 @@ export function collectChangedFiles(ref: string, cwd: string, runner: GitRunner 
     if (change.status === "D") continue;
     const absolute = toProjectPath(projectRoot, change.path);
     if (absolute === null) continue;
-    if (change.status === "A") {
-      files.set(absolute, { kind: "all" });
-      continue;
-    }
-    if (change.status === "R") {
-      if (change.score === 100) {
-        // Only Git's R100 status guarantees that the destination has no changed
-        // source lines. Do not broaden a pure rename to a full file.
-        files.set(absolute, { kind: "ranges", ranges: [] });
-      } else {
-        // An edited rename has a destination-side change. Selecting every
-        // destination function is conservative and avoids silently dropping a
-        // change if a patch cannot be attributed to a function range.
-        files.set(absolute, { kind: "all" });
-      }
-      continue;
-    }
-    const patch = runRequiredGit(
-      runner,
-      ["diff", "--no-ext-diff", "--no-color", "--unified=0", mergeBase, "HEAD", "--", change.path],
-      projectRoot,
-      `cannot determine changed lines for ${change.path}`,
-    );
-    files.set(absolute, { kind: "ranges", ranges: parseNewLineRanges(patch) });
+    files.set(absolute, changedFileForStatus(change, projectRoot, mergeBase, runner));
   }
   return { mergeBase, files };
 }
@@ -151,26 +150,41 @@ function isSupportedStatus(status: string): status is NameStatus["status"] {
 function parseNameStatus(output: string): NameStatus[] {
   const parts = output.split("\0");
   const changes: NameStatus[] = [];
-  for (let index = 0; index < parts.length - 1;) {
-    const rawStatus = parts[index++];
-    if (rawStatus === undefined || rawStatus.length === 0) continue;
-    const status = rawStatus[0];
-    if (status === undefined || !isSupportedStatus(status)) {
-      throw new GitInputError(`cannot parse git changed-file status "${rawStatus}"`);
-    }
-    if (status === "R" || status === "C") {
-      const score = parseRenameScore(rawStatus);
-      index++; // old path
-      const newPath = parts[index++];
-      if (newPath === undefined) throw new GitInputError("cannot parse renamed git path");
-      changes.push({ status, score, path: newPath });
-    } else {
-      const changedPath = parts[index++];
-      if (changedPath === undefined) throw new GitInputError("cannot parse git changed-file path");
-      changes.push({ status, path: changedPath });
-    }
+  let index = 0;
+  while (index < parts.length - 1) {
+    const record = parseNameStatusRecord(parts, index);
+    if (record !== undefined) changes.push(record.change);
+    index += record === undefined ? 1 : record.consumed;
   }
   return changes;
+}
+
+interface NameStatusRecord {
+  readonly change: NameStatus;
+  /** Number of NUL entries consumed by this record (status + path(s)). */
+  readonly consumed: number;
+}
+
+/**
+ * Parse one NUL-separated name-status record at `index`. R/C records consume
+ * the status, the old path, and the destination path; simple records consume
+ * the status and one path. An empty entry yields `undefined` so the caller
+ * skips it. A record whose declared paths run past the end of the input is
+ * malformed and rejected.
+ */
+function parseNameStatusRecord(parts: string[], index: number): NameStatusRecord | undefined {
+  const rawStatus = parts[index]!;
+  if (rawStatus.length === 0) return undefined;
+  const status = rawStatus.charAt(0);
+  if (!isSupportedStatus(status)) {
+    throw new GitInputError(`cannot parse git changed-file status "${rawStatus}"`);
+  }
+  if (status === "R" || status === "C") {
+    const newPath = parts[index + 2];
+    if (newPath === undefined) throw new GitInputError("cannot parse renamed git path");
+    return { change: { status, score: parseRenameScore(rawStatus), path: newPath }, consumed: 3 };
+  }
+  return { change: { status, path: parts[index + 1]! }, consumed: 2 };
 }
 
 function parseRenameScore(rawStatus: string): number {
@@ -191,18 +205,61 @@ function toProjectPath(cwd: string, relativePath: string): string | null {
   return absolute;
 }
 
+/**
+ * The ChangedFile entry for one non-deleted name-status record:
+ * - A: the whole file is new, so every function is changed;
+ * - R100: only Git's R100 status guarantees that the destination has no
+ *   changed source lines, so the destination gets an empty range list rather
+ *   than a full-file selection; an edited rename (R<100) is conservative and
+ *   selects every destination function, avoiding silently dropping a change
+ *   if a patch cannot be attributed to a function range;
+ * - M, C, T: changed lines are attributed from a diff of the destination
+ *   (new) path, matching the historical behavior.
+ */
+function changedFileForStatus(
+  change: NameStatus,
+  projectRoot: string,
+  mergeBase: string,
+  runner: GitRunner,
+): ChangedFile {
+  if (change.status === "A") {
+    return { kind: "all" };
+  }
+  if (change.status === "R") {
+    if (change.score === 100) {
+      return { kind: "ranges", ranges: [] };
+    }
+    return { kind: "all" };
+  }
+  const patch = runRequiredGit(
+    runner,
+    ["diff", "--no-ext-diff", "--no-color", "--unified=0", mergeBase, "HEAD", "--", change.path],
+    projectRoot,
+    `cannot determine changed lines for ${change.path}`,
+  );
+  return { kind: "ranges", ranges: parseNewLineRanges(patch) };
+}
+
 function parseNewLineRanges(patch: string): ChangedLineRange[] {
   const ranges: ChangedLineRange[] = [];
   const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm;
   for (let match = hunk.exec(patch); match !== null; match = hunk.exec(patch)) {
-    const start = Number(match[1]);
-    const count = match[2] === undefined ? 1 : Number(match[2]);
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count) || start < 1 || count < 0) {
-      throw new GitInputError("cannot parse git changed-line range");
-    }
-    // A deletion has no new source line. Its insertion boundary is still a
-    // deterministic source location and catches functions modified by deletion.
-    ranges.push({ start, end: count === 0 ? start : start + count - 1 });
+    ranges.push(parseHunkRange(match));
   }
   return ranges;
+}
+
+/**
+ * The new-file line range of one hunk header. A missing count defaults to
+ * one line; a zero-count (deletion) hunk has no new source line, but its
+ * insertion boundary is still a deterministic source location and catches
+ * functions modified by deletion.
+ */
+function parseHunkRange(match: RegExpExecArray): ChangedLineRange {
+  const start = Number(match[1]);
+  const count = match[2] === undefined ? 1 : Number(match[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count) || start < 1 || count < 0) {
+    throw new GitInputError("cannot parse git changed-line range");
+  }
+  return { start, end: count === 0 ? start : start + count - 1 };
 }
