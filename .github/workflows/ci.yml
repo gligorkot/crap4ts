@@ -32,28 +32,39 @@ jobs:
       - name: CRAP report (threshold 8; report-only)
         shell: bash
         run: |
+          # Append the built CLI's Markdown report (--format markdown) to
+          # $GITHUB_STEP_SUMMARY as valid GitHub Markdown.
+          #
+          # Report-only semantics:
+          # - exit 2 is the expected threshold breach: the report is published;
+          # - any other nonzero exit fails the job, its stderr stays in the job
+          #   log, and nothing is appended to the summary (no misleading
+          #   success report).
           {
-            echo "## CRAP report (threshold 8; report-only)"
-            echo
             echo "> ⚠️ **Temporary policy:** CRAP violations above the default threshold of 8 are reported, not enforced. The self-score audit below uses a temporary threshold of 30 while the CLI is refactored."
             echo
-            echo '```text'
           } >> "$GITHUB_STEP_SUMMARY"
 
+          report_output="$(mktemp)"
+          trap 'rm -f "$report_output"' EXIT
+
           set +e
-          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 >> "$GITHUB_STEP_SUMMARY" 2>&1
+          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown > "$report_output"
           status=$?
           set -e
 
-          {
-            echo '```'
-            echo
+          if [[ "$status" -eq 0 || "$status" -eq 2 ]]; then
+            cat "$report_output" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
             if [[ "$status" -eq 2 ]]; then
-              echo "> ℹ️ The threshold-8 report exited 2 as expected; violations are report-only for now."
+              {
+                echo
+                echo "> ℹ️ The threshold-8 report exited 2 as expected; violations are report-only for now."
+              } >> "$GITHUB_STEP_SUMMARY"
             fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$status" -ne 0 && "$status" -ne 2 ]]; then
+          else
+            echo "CRAP report failed unexpectedly with exit $status; report follows:" >&2
+            cat "$report_output" >&2
             exit "$status"
           fi
 
