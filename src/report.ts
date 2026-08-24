@@ -242,7 +242,7 @@ export function escapeCell(value: string): string {
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
   if (/^[A-Za-z0-9._/ -]+$/.test(cleaned)) return cleaned;
   const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
-  return `\`${escaped}\``;
+  return literalCode(escaped);
 }
 
 /**
