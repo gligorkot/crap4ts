@@ -238,9 +238,19 @@ export function literalCode(value: string): string {
  * even when they appear inside an inline code span. Control characters cannot
  * create a new row or block.
  */
+function isPlainTableText(value: string): boolean {
+  if (!/^[A-Za-z0-9._/ -]+$/.test(value)) return false;
+  // GFM extended autolinks `www.*` and treats underscore-delimited text as
+  // emphasis/strong. Keep ordinary `normal_name` readable, but route forms
+  // that can change rendered meaning through the literal-code path.
+  if (/www\./i.test(value)) return false;
+  return !/(^|[^A-Za-z0-9])_{1,3}.+_{1,3}($|[^A-Za-z0-9])/.test(value);
+}
+
+/** Render a dynamic table cell without permitting GFM interpretation. */
 export function escapeCell(value: string): string {
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
-  if (/^[A-Za-z0-9._/ -]+$/.test(cleaned)) return cleaned;
+  if (isPlainTableText(cleaned)) return cleaned;
   const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
   return literalCode(escaped);
 }

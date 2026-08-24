@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildReport, buildReportRows, sortRows, renderHumanReport, renderJsonReport, renderMarkdownReport } from "../src/report.js";
+import { buildReport, buildReportRows, escapeCell, literalCode, sortRows, renderHumanReport, renderJsonReport, renderMarkdownReport } from "../src/report.js";
 import type { FunctionCoverage } from "../src/coverage.js";
 import type { FunctionInfo } from "../src/complexity.js";
 
@@ -163,6 +163,13 @@ describe("renderMarkdownReport", () => {
     expect(text).toContain("| normal_name | /src/normal_name.ts |");
     expect(text).not.toContain("`normal_name`");
     expect(text).not.toContain("`/src/normal_name.ts`");
+  });
+
+  it("routes GFM autolinks and underscore emphasis forms through literal code", () => {
+    expect(escapeCell("www.evil.example/index.ts")).toBe(literalCode("www\\.evil\\.example\\/index\\.ts"));
+    expect(escapeCell("_owned_")).toBe(literalCode("\\_owned\\_"));
+    expect(escapeCell("__owned__")).toBe(literalCode("\\_\\_owned\\_\\_"));
+    expect(escapeCell("normal_name")).toBe("normal_name");
   });
 
   it("escapes pipe characters in cell values", () => {
