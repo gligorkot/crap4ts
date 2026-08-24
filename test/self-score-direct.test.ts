@@ -440,14 +440,18 @@ describe("self-run over this repository's own source at threshold 8", () => {
   });
 
   it.skipIf(!HAS_COVERAGE)("documents the honest current integration state for scripts/self-score.ts", () => {
-    // scripts/self-score.ts (untouched in this slice) still expects the
-    // legacy threshold-30 breach of parseArgs/main. parseArgs no longer
-    // exists in src/cli.ts after the CLI decomposition (its logic lives in
-    // parseArgsOrExit in cli-helpers.ts), and the decomposed main no longer
-    // breaches the temporary threshold 30, so the default-expected-name
-    // validation reports the missing row, not a spurious pass or an
-    // unexpected-breach failure. An honest integration follow-up updates the
-    // script's stale expectations.
+    // scripts/self-score.ts is now a genuine own-source gate at threshold
+    // 8: it runs the real source CLI against fresh coverage, proves the
+    // report is a structurally valid, summary-consistent, own-source result
+    // of the current tree, and exits 0 only when zero rows breach the
+    // threshold (gate logic pinned in test/self-score-gate.test.ts). The
+    // legacy premise — "the CLI must exit 2 with parseArgs/main breaching
+    // threshold 30" — is retired: parseArgs no longer exists in src/cli.ts
+    // (its logic lives in parseArgsOrExit in cli-helpers.ts), and no source
+    // function breaches threshold 8, so the gate expects no breaches at
+    // all. The helpers' default expected-name validation (used only with an
+    // explicit expected list) still reports the missing row, not a
+    // spurious pass.
     const report = selfRunSelfScoreReport();
     const names = new Set<string>();
     for (const row of report.rows) {
@@ -455,6 +459,9 @@ describe("self-run over this repository's own source at threshold 8", () => {
       names.add(row.displayName);
     }
     expect(names.has("parseArgs")).toBe(false);
+    // The whole-repo threshold-8 report is currently clean: the gate's
+    // pass state is the zero-breach state.
+    expect(report.rows.filter((row) => row.crap > row.threshold)).toEqual([]);
     const err = validateSelfScoreBreach(report, 8);
     expect(err).toBe(
       'Expected breach function "parseArgs" not found in report rows',
