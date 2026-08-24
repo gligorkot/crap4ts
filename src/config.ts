@@ -86,16 +86,7 @@ export function thresholdForPath(
 ): number {
   if (cliThreshold !== undefined) return cliThreshold;
   if (config === undefined) return DEFAULT_THRESHOLD;
-  let winner: PathThresholdRule | undefined;
-  let winnerSpecificity: PatternSpecificity | undefined;
-  for (const rule of config.thresholds ?? []) {
-    if (!matchesConfigPattern(filePath, projectRoot, rule.glob)) continue;
-    const specificity = patternSpecificity(rule.glob);
-    if (winnerSpecificity === undefined || isMoreSpecific(specificity, winnerSpecificity)) {
-      winner = rule;
-      winnerSpecificity = specificity;
-    }
-  }
+  const winner = findMatchingThresholdRule(config.thresholds ?? [], filePath, projectRoot);
   return winner?.threshold ?? config.threshold ?? DEFAULT_THRESHOLD;
 }
 
@@ -107,6 +98,25 @@ export function isConfigExcluded(filePath: string, projectRoot: string, config: 
   return patterns.some((pattern) => matchesConfigPattern(filePath, projectRoot, pattern));
 }
 
+/** Find the most specific matching threshold rule; earlier rules win exact specificity ties. */
+function findMatchingThresholdRule(
+  rules: readonly PathThresholdRule[],
+  filePath: string,
+  projectRoot: string,
+): PathThresholdRule | undefined {
+  let winner: PathThresholdRule | undefined;
+  let winnerSpecificity: PatternSpecificity | undefined;
+  for (const rule of rules) {
+    if (!matchesConfigPattern(filePath, projectRoot, rule.glob)) continue;
+    const specificity = patternSpecificity(rule.glob);
+    if (winnerSpecificity === undefined || isMoreSpecific(specificity, winnerSpecificity)) {
+      winner = rule;
+      winnerSpecificity = specificity;
+    }
+  }
+  return winner;
+}
+
 function validateConfig(value: unknown, configRoot?: string): Crap4tsConfig {
   if (!isPlainObject(value)) throw new Error("config must export an object");
   const allowed = new Set(["version", "src", "exclude", "threshold", "thresholds", "changedSince"]);
@@ -116,33 +126,49 @@ function validateConfig(value: unknown, configRoot?: string): Crap4tsConfig {
   if (value["version"] !== CONFIG_VERSION) {
     throw new Error(`config.version must be ${CONFIG_VERSION}`);
   }
-  const src = validateSourcePaths(value["src"], configRoot);
-  const exclude = validateStringList(value["exclude"], "exclude");
-  const threshold = validateThreshold(value["threshold"], "threshold");
-  const changedSince = validateChangedSince(value["changedSince"]);
-  let thresholds: readonly PathThresholdRule[] | undefined;
-  if (value["thresholds"] !== undefined) {
-    if (!Array.isArray(value["thresholds"])) throw new Error("config.thresholds must be an array");
-    thresholds = value["thresholds"].map((rule, index) => {
-      if (!isPlainObject(rule)) throw new Error(`config.thresholds[${index}] must be an object`);
-      const keys = Object.keys(rule);
-      if (keys.some((key) => key !== "glob" && key !== "threshold") || typeof rule["glob"] !== "string") {
-        throw new Error(`config.thresholds[${index}] must contain only glob and threshold`);
-      }
-      if (rule["glob"].length === 0) throw new Error(`config.thresholds[${index}].glob must not be empty`);
-      const ruleThreshold = validateThreshold(rule["threshold"], `thresholds[${index}].threshold`);
-      if (ruleThreshold === undefined) throw new Error(`config.thresholds[${index}].threshold is required`);
-      return Object.freeze({ glob: rule["glob"], threshold: ruleThreshold });
-    });
-  }
+  return buildFrozenConfig({
+    src: validateSourcePaths(value["src"], configRoot),
+    exclude: validateStringList(value["exclude"], "exclude"),
+    threshold: validateThreshold(value["threshold"], "threshold"),
+    thresholds: validateThresholds(value["thresholds"]),
+    changedSince: validateChangedSince(value["changedSince"]),
+  });
+}
+
+/** Assemble the frozen Crap4tsConfig, omitting keys that are not present. */
+function buildFrozenConfig(parts: {
+  readonly src?: string | readonly string[] | undefined;
+  readonly exclude?: string | readonly string[] | undefined;
+  readonly threshold?: number | undefined;
+  readonly thresholds?: readonly PathThresholdRule[] | undefined;
+  readonly changedSince?: string | undefined;
+}): Crap4tsConfig {
   return Object.freeze({
     version: CONFIG_VERSION,
-    ...(src === undefined ? {} : { src }),
-    ...(exclude === undefined ? {} : { exclude }),
-    ...(threshold === undefined ? {} : { threshold }),
-    ...(thresholds === undefined ? {} : { thresholds: Object.freeze(thresholds) }),
-    ...(changedSince === undefined ? {} : { changedSince }),
+    ...(parts.src === undefined ? {} : { src: parts.src }),
+    ...(parts.exclude === undefined ? {} : { exclude: parts.exclude }),
+    ...(parts.threshold === undefined ? {} : { threshold: parts.threshold }),
+    ...(parts.thresholds === undefined ? {} : { thresholds: Object.freeze(parts.thresholds) }),
+    ...(parts.changedSince === undefined ? {} : { changedSince: parts.changedSince }),
   });
+}
+
+function validateThresholds(value: unknown): readonly PathThresholdRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("config.thresholds must be an array");
+  return value.map((rule, index) => validateThresholdRule(rule, index));
+}
+
+function validateThresholdRule(rule: unknown, index: number): PathThresholdRule {
+  if (!isPlainObject(rule)) throw new Error(`config.thresholds[${index}] must be an object`);
+  const glob = rule["glob"];
+  if (Object.keys(rule).some((key) => key !== "glob" && key !== "threshold") || typeof glob !== "string") {
+    throw new Error(`config.thresholds[${index}] must contain only glob and threshold`);
+  }
+  if (glob.length === 0) throw new Error(`config.thresholds[${index}].glob must not be empty`);
+  const ruleThreshold = validateThreshold(rule["threshold"], `thresholds[${index}].threshold`);
+  if (ruleThreshold === undefined) throw new Error(`config.thresholds[${index}].threshold is required`);
+  return Object.freeze({ glob, threshold: ruleThreshold });
 }
 
 function validateStringList(value: unknown, name: string): string | readonly string[] | undefined {
@@ -160,23 +186,35 @@ function validateSourcePaths(value: unknown, configRoot?: string): string | read
   const entries = typeof src === "string" ? [src] : src;
   if (entries.length === 0) throw new Error("config.src must not be an empty array");
   for (const entry of entries) {
-    const normalized = path.posix.normalize(toPosix(entry));
-    if (path.isAbsolute(entry) || path.win32.isAbsolute(entry) || path.posix.isAbsolute(normalized) || normalized === ".." || normalized.startsWith("../")) {
-      throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
-    }
-    if (configRoot !== undefined) {
-      let sourceRoot: string;
-      try {
-        sourceRoot = fs.realpathSync(path.resolve(configRoot, entry));
-      } catch (error) {
-        throw new Error(`config.src cannot be resolved, got "${entry}": ${(error as Error).message}`);
-      }
-      if (!isContainedPath(configRoot, sourceRoot)) {
-        throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
-      }
-    }
+    assertRelativeSourceEntry(entry, configRoot);
   }
   return src;
+}
+
+function assertRelativeSourceEntry(entry: string, configRoot?: string): void {
+  const normalized = path.posix.normalize(toPosix(entry));
+  if (
+    path.isAbsolute(entry) ||
+    path.win32.isAbsolute(entry) ||
+    path.posix.isAbsolute(normalized) ||
+    normalized === ".." ||
+    normalized.startsWith("../")
+  ) {
+    throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
+  }
+  if (configRoot !== undefined) assertSourceEntryWithinProject(configRoot, entry);
+}
+
+function assertSourceEntryWithinProject(configRoot: string, entry: string): void {
+  let sourceRoot: string;
+  try {
+    sourceRoot = fs.realpathSync(path.resolve(configRoot, entry));
+  } catch (error) {
+    throw new Error(`config.src cannot be resolved, got "${entry}": ${(error as Error).message}`);
+  }
+  if (!isContainedPath(configRoot, sourceRoot)) {
+    throw new Error(`config.src must contain project-relative paths, got "${entry}"`);
+  }
 }
 
 function isContainedPath(root: string, candidate: string): boolean {
@@ -227,15 +265,36 @@ async function importTranspiledTypeScript(configPath: string): Promise<Record<st
   });
   const diagnostics = result.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error) ?? [];
   if (diagnostics.length > 0) {
-    throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-      getCanonicalFileName: (fileName) => fileName,
-      getCurrentDirectory: () => process.cwd(),
-      getNewLine: () => "\n",
-    }));
+    throw new Error(formatTranspileDiagnostics(diagnostics));
   }
   const module = { exports: {} as Record<string, unknown> };
-  const execute = vm.runInThisContext(
-    `(function (exports, require, module, __filename, __dirname) { ${result.outputText}\n})`,
+  const execute = compileTranspiledCommonJs(result.outputText, configPath);
+  execute(module.exports, createRequire(configPath), module, configPath, path.dirname(configPath));
+  return module.exports;
+}
+
+/** Render TypeScript error diagnostics with file, line, and column context. */
+function formatTranspileDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
+  return ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: () => process.cwd(),
+    getNewLine: () => "\n",
+  });
+}
+
+/** Compile transpiled CommonJS text into the module-executing wrapper function. */
+function compileTranspiledCommonJs(
+  outputText: string,
+  configPath: string,
+): (
+  exports: Record<string, unknown>,
+  require: NodeJS.Require,
+  module: { exports: Record<string, unknown> },
+  filename: string,
+  dirname: string,
+) => void {
+  return vm.runInThisContext(
+    `(function (exports, require, module, __filename, __dirname) { ${outputText}\n})`,
     { filename: configPath },
   ) as (
     exports: Record<string, unknown>,
@@ -244,8 +303,6 @@ async function importTranspiledTypeScript(configPath: string): Promise<Record<st
     filename: string,
     dirname: string,
   ) => void;
-  execute(module.exports, createRequire(configPath), module, configPath, path.dirname(configPath));
-  return module.exports;
 }
 
 interface PatternSpecificity {
@@ -272,11 +329,10 @@ function globToRegExp(pattern: string): RegExp {
   const normalized = toPosix(pattern);
   let expression = "^";
   for (let index = 0; index < normalized.length; index++) {
-    const character = normalized[index];
-    if (character === undefined) continue;
-    const next = normalized[index + 1];
+    const character = normalized.charAt(index);
+    const next = normalized.charAt(index + 1);
     if (character === "*" && next === "*") {
-      if (normalized[index + 2] === "/") {
+      if (normalized.charAt(index + 2) === "/") {
         expression += "(?:.*/)?";
         index += 2;
       } else {
@@ -285,9 +341,14 @@ function globToRegExp(pattern: string): RegExp {
       }
     } else if (character === "*") expression += "[^/]*";
     else if (character === "?") expression += "[^/]";
-    else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    else expression += escapeGlobCharacter(character);
   }
   return new RegExp(`${expression}$`);
+}
+
+/** Escape regular expression metacharacters in a literal glob character. */
+function escapeGlobCharacter(character: string): string {
+  return character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
 }
 
 function toPosix(value: string): string {
