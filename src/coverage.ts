@@ -170,6 +170,93 @@ function commonSuffixSegments(a: string[], b: string[]): number {
 }
 
 /**
+ * Find an Istanbul file entry by exact normalized path: the first entry whose
+ * `path` (or the top-level key) resolves to the same absolute path as the
+ * target.
+ *
+ * This is the unambiguous, highest-priority matching rule. Returns null when
+ * no entry path matches exactly.
+ */
+function exactFileEntryMatch(
+  coverage: IstanbulCoverage,
+  target: string,
+): IstanbulFileEntry | null {
+  const keys = Object.keys(coverage);
+  for (const key of keys) {
+    const entry = coverage[key];
+    if (entry === undefined) {
+      continue;
+    }
+    if (normalizeFilePath(entry.path) === target) {
+      return entry;
+    }
+    if (normalizeFilePath(key) === target) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect the anchored project-relative suffix candidates for a target path.
+ *
+ * Each candidate is an entry whose normalized `path` shares a trailing
+ * segment suffix with the target; `bestScore` is the maximum shared suffix
+ * length. Only entries sharing the best score are kept. Returns empty
+ * candidates when no candidate shares any segment with the target.
+ */
+function anchorSuffixCandidate(
+  coverage: IstanbulCoverage,
+  target: string,
+): { candidates: IstanbulFileEntry[]; bestScore: number } {
+  const targetSegs = pathSegments(target);
+  // Require at least 2 segments (directory + filename) to reject basename-only.
+  if (targetSegs.length < 2) {
+    return { candidates: [], bestScore: 0 };
+  }
+  const candidates: IstanbulFileEntry[] = [];
+  let bestScore = 0;
+  const keys = Object.keys(coverage);
+  for (const key of keys) {
+    const entry = coverage[key];
+    if (entry === undefined) {
+      continue;
+    }
+    const candSegs = pathSegments(normalizeFilePath(entry.path));
+    const score = commonSuffixSegments(targetSegs, candSegs);
+    if (score > bestScore) {
+      bestScore = score;
+      candidates.length = 0;
+      candidates.push(entry);
+    } else if (score === bestScore && score > 0) {
+      candidates.push(entry);
+    }
+  }
+  return { candidates, bestScore };
+}
+
+/**
+ * Decide whether the suffix candidates form an unambiguous anchored match:
+ * exactly one candidate, and the shared suffix covers the full target
+ * relative path (bestScore >= target segment count). This is the
+ * fail-closed gate for suffix matching: ties or partial suffixes return
+ * null.
+ */
+function acceptUnambiguousSuffix(
+  candidates: readonly IstanbulFileEntry[],
+  bestScore: number,
+  target: string,
+): IstanbulFileEntry | null {
+  // Only accept when exactly one candidate has the best score, and the suffix
+  // covers the full target relative path (bestScore === targetSegs.length),
+  // ensuring an anchored project-relative match, not a basename-only match.
+  if (candidates.length === 1 && bestScore >= pathSegments(target).length) {
+    return candidates[0]!;
+  }
+  return null;
+}
+
+/**
  * Find the Istanbul file entry whose `path` matches `sourcePath`.
  *
  * Matching tries, in order:
@@ -190,52 +277,12 @@ function findFileEntry(
   sourcePath: string,
 ): IstanbulFileEntry | null {
   const target = normalizeFilePath(sourcePath);
-  const keys = Object.keys(coverage);
-
-  // Exact match on resolved path or top-level key.
-  for (const key of keys) {
-    const entry = coverage[key];
-    if (entry === undefined) {
-      continue;
-    }
-    if (normalizeFilePath(entry.path) === target) {
-      return entry;
-    }
-    if (normalizeFilePath(key) === target) {
-      return entry;
-    }
+  const exact = exactFileEntryMatch(coverage, target);
+  if (exact !== null) {
+    return exact;
   }
-
-  // Anchored suffix match on path segments — only accept an unambiguous match.
-  const targetSegs = pathSegments(target);
-  // Require at least 2 segments (directory + filename) to reject basename-only.
-  if (targetSegs.length < 2) {
-    return null;
-  }
-  const candidates: IstanbulFileEntry[] = [];
-  let bestScore = 0;
-  for (const key of keys) {
-    const entry = coverage[key];
-    if (entry === undefined) {
-      continue;
-    }
-    const candSegs = pathSegments(normalizeFilePath(entry.path));
-    const score = commonSuffixSegments(targetSegs, candSegs);
-    if (score > bestScore) {
-      bestScore = score;
-      candidates.length = 0;
-      candidates.push(entry);
-    } else if (score === bestScore && score > 0) {
-      candidates.push(entry);
-    }
-  }
-  // Only accept when exactly one candidate has the best score, and the suffix
-  // covers the full target relative path (bestScore === targetSegs.length),
-  // ensuring an anchored project-relative match, not a basename-only match.
-  if (candidates.length === 1 && bestScore >= targetSegs.length) {
-    return candidates[0]!;
-  }
-  return null;
+  const { candidates, bestScore } = anchorSuffixCandidate(coverage, target);
+  return acceptUnambiguousSuffix(candidates, bestScore, target);
 }
 
 /**
@@ -313,6 +360,83 @@ function rangeStrictlyContainsRange(
 }
 
 /**
+ * Test whether the source range of function `inner` is strictly contained
+ * within the source range of function `outer` (the "more specific"
+ * relationship for two source functions).
+ */
+function isFnRangeStrictlyContainedIn(
+  inner: FunctionInfo,
+  outer: FunctionInfo,
+): boolean {
+  return rangeStrictlyContainsRange(
+    outer.startLine,
+    outer.startColumn,
+    outer.endLine,
+    outer.endColumn,
+    inner.startLine,
+    inner.startColumn,
+    inner.endLine,
+    inner.endColumn,
+  );
+}
+
+/**
+ * Collect the indexes of all source functions whose line+column range
+ * contains the given loc.
+ */
+function containerCandidateIndexes(
+  fns: FunctionInfo[],
+  locStart: Position,
+  locEnd: Position,
+): number[] {
+  const candidates: number[] = [];
+  for (let i = 0; i < fns.length; i++) {
+    const fn = fns[i];
+    if (fn === undefined) {
+      continue;
+    }
+    if (locContainedInFn(fn, locStart, locEnd)) {
+      candidates.push(i);
+    }
+  }
+  return candidates;
+}
+
+/**
+ * Reduce a list of container candidate indexes to the minimal ones: those
+ * candidates that no other candidate is strictly contained within (no other
+ * candidate has a strictly smaller range).
+ *
+ * A single minimal candidate is the most-specific container. Multiple
+ * minimals — identical ranges, or incomparable ranges that both contain the
+ * loc — mean the containment is ambiguous.
+ */
+function minimalContainerIndexes(
+  fns: FunctionInfo[],
+  candidates: readonly number[],
+  containsFnRange: (outerIndex: number, innerIndex: number) => boolean,
+): number[] {
+  const minimal: number[] = [];
+  for (const i of candidates) {
+    let isMinimal = true;
+    for (const j of candidates) {
+      if (j === i) {
+        continue;
+      }
+      // Is fnJ strictly contained within fnI? If so, fnI is not minimal.
+      if (containsFnRange(i, j)) {
+        isMinimal = false;
+        break;
+      }
+    }
+    if (isMinimal) {
+      minimal.push(i);
+    }
+  }
+  return minimal;
+}
+
+/**
  * Find the uniquely most-specific source function that contains `loc`.
  *
  * "Most specific" = the function whose line+column source range is the unique
@@ -332,57 +456,18 @@ function mostSpecificContainer(
   locStart: Position,
   locEnd: Position,
 ): number | null {
-  // Collect all candidates whose range contains the loc.
-  const candidates: number[] = [];
-  for (let i = 0; i < fns.length; i++) {
-    const fn = fns[i];
-    if (fn === undefined) {
-      continue;
-    }
-    if (locContainedInFn(fn, locStart, locEnd)) {
-      candidates.push(i);
-    }
-  }
+  const candidates = containerCandidateIndexes(fns, locStart, locEnd);
   if (candidates.length === 0) {
     return null;
   }
   if (candidates.length === 1) {
     return candidates[0]!;
   }
-
   // Find minimal candidates: those where no other candidate is strictly
   // contained within them (no other candidate has a strictly smaller range).
-  const minimal: number[] = [];
-  for (const i of candidates) {
-    const fnI = fns[i]!;
-    let isMinimal = true;
-    for (const j of candidates) {
-      if (j === i) {
-        continue;
-      }
-      const fnJ = fns[j]!;
-      // Is fnJ strictly contained within fnI? If so, fnI is not minimal.
-      if (
-        rangeStrictlyContainsRange(
-          fnI.startLine,
-          fnI.startColumn,
-          fnI.endLine,
-          fnI.endColumn,
-          fnJ.startLine,
-          fnJ.startColumn,
-          fnJ.endLine,
-          fnJ.endColumn,
-        )
-      ) {
-        isMinimal = false;
-        break;
-      }
-    }
-    if (isMinimal) {
-      minimal.push(i);
-    }
-  }
-
+  const minimal = minimalContainerIndexes(fns, candidates, (i, j) =>
+    isFnRangeStrictlyContainedIn(fns[j]!, fns[i]!),
+  );
   // Unique minimal → the most-specific container.
   // Zero or multiple minimals → ambiguous/tie → assign to none.
   if (minimal.length === 1) {
@@ -408,7 +493,7 @@ function mostSpecificContainer(
  */
 function mostSpecificMatchedContainer(
   fns: FunctionInfo[],
-  matchedFlags: boolean[],
+  matchedFlags: readonly boolean[],
   stmtStart: Position,
   stmtEnd: Position,
 ): number | null {
@@ -421,6 +506,117 @@ function mostSpecificMatchedContainer(
     return null;
   }
   return ownerIdx;
+}
+
+/**
+ * Assign each fnMap entry to at most one source function and record which
+ * source functions received an identity (the `matched` flags).
+ *
+ * Each entry's `loc` is assigned to the uniquely most-specific containing
+ * source function; ties are rejected conservatively (assigned to none).
+ */
+function markMatchedFunctionFlags(
+  fileEntry: IstanbulFileEntry,
+  fns: FunctionInfo[],
+): boolean[] {
+  const matchedFlags = new Array<boolean>(fns.length).fill(false);
+  for (const key of Object.keys(fileEntry.fnMap)) {
+    const entry = fileEntry.fnMap[key];
+    if (entry === undefined) {
+      continue;
+    }
+    const idx = mostSpecificContainer(fns, entry.loc.start, entry.loc.end);
+    if (idx !== null) {
+      matchedFlags[idx] = true;
+    }
+  }
+  return matchedFlags;
+}
+
+/**
+ * Assign each Istanbul statement to at most one matched source function and
+ * accumulate total/covered counts per function.
+ *
+ * Statements whose most-specific owner is unmatched (or whose ownership is
+ * ambiguous) are excluded entirely — they never fall through to a matched
+ * parent.
+ */
+function assignStatementsToOwners(
+  fileEntry: IstanbulFileEntry,
+  fns: FunctionInfo[],
+  matchedFlags: readonly boolean[],
+): { totalStatements: number[]; coveredStatements: number[] } {
+  const totalStatements = new Array<number>(fns.length).fill(0);
+  const coveredStatements = new Array<number>(fns.length).fill(0);
+  const statementMap = fileEntry.statementMap;
+  const s = fileEntry.s;
+  if (statementMap === undefined || s === undefined) {
+    return { totalStatements, coveredStatements };
+  }
+  for (const key of Object.keys(statementMap)) {
+    const stmt = statementMap[key];
+    if (stmt === undefined) {
+      continue;
+    }
+    const ownerIdx = mostSpecificMatchedContainer(
+      fns,
+      matchedFlags,
+      stmt.start,
+      stmt.end,
+    );
+    if (ownerIdx !== null) {
+      totalStatements[ownerIdx]! += 1;
+      const count = s[key];
+      if (count !== undefined && count > 0) {
+        coveredStatements[ownerIdx]! += 1;
+      }
+    }
+  }
+  return { totalStatements, coveredStatements };
+}
+
+/**
+ * Build the per-function {@link FunctionCoverage} results for one file from
+ * the matched flags and owned statement counts.
+ *
+ * Unmatched functions report coverage 0, `matched: false`, zero statements.
+ * Matched functions report covered/total over their owned statements
+ * (0 when they own no statements). Input order is preserved.
+ */
+function buildFileFunctionCoverage(
+  fns: FunctionInfo[],
+  matchedFlags: readonly boolean[],
+  totalStatements: readonly number[],
+  coveredStatements: readonly number[],
+): FunctionCoverage[] {
+  const results: FunctionCoverage[] = [];
+  for (let i = 0; i < fns.length; i++) {
+    const fn = fns[i]!;
+    const matched = matchedFlags[i]!;
+    if (!matched) {
+      // Unmatched: identity false. A statement alone never marks a function
+      // matched. Coverage 0, zero statements.
+      results.push({
+        functionInfo: fn,
+        coverage: 0,
+        matched: false,
+        totalStatements: 0,
+        coveredStatements: 0,
+      });
+      continue;
+    }
+    const total = totalStatements[i]!;
+    const covered = coveredStatements[i]!;
+    const coverage = total > 0 ? covered / total : 0;
+    results.push({
+      functionInfo: fn,
+      coverage,
+      matched: true,
+      totalStatements: total,
+      coveredStatements: covered,
+    });
+  }
+  return results;
 }
 
 /**
@@ -442,78 +638,20 @@ export function mapFileCoverage(
   fns: FunctionInfo[],
 ): FunctionCoverage[] {
   // Step 1: assign fnMap entries to source functions.
-  const matchedFlags = new Array<boolean>(fns.length).fill(false);
-
-  for (const key of Object.keys(fileEntry.fnMap)) {
-    const entry = fileEntry.fnMap[key];
-    if (entry === undefined) {
-      continue;
-    }
-    const locStart = entry.loc.start;
-    const locEnd = entry.loc.end;
-    const idx = mostSpecificContainer(fns, locStart, locEnd);
-    if (idx !== null) {
-      matchedFlags[idx] = true;
-    }
-  }
-
+  const matchedFlags = markMatchedFunctionFlags(fileEntry, fns);
   // Step 2: assign statements to matched functions.
-  const statementMap = fileEntry.statementMap;
-  const s = fileEntry.s;
-  const totalStatements = new Array<number>(fns.length).fill(0);
-  const coveredStatements = new Array<number>(fns.length).fill(0);
-
-  if (statementMap !== undefined && s !== undefined) {
-    for (const key of Object.keys(statementMap)) {
-      const stmt = statementMap[key];
-      if (stmt === undefined) {
-        continue;
-      }
-      const ownerIdx = mostSpecificMatchedContainer(
-        fns,
-        matchedFlags,
-        stmt.start,
-        stmt.end,
-      );
-      if (ownerIdx !== null) {
-        totalStatements[ownerIdx]! += 1;
-        const count = s[key];
-        if (count !== undefined && count > 0) {
-          coveredStatements[ownerIdx]! += 1;
-        }
-      }
-    }
-  }
-
+  const { totalStatements, coveredStatements } = assignStatementsToOwners(
+    fileEntry,
+    fns,
+    matchedFlags,
+  );
   // Step 3: build results.
-  const results: FunctionCoverage[] = [];
-  for (let i = 0; i < fns.length; i++) {
-    const fn = fns[i]!;
-    const matched = matchedFlags[i]!;
-    const total = totalStatements[i]!;
-    const covered = coveredStatements[i]!;
-    if (!matched) {
-      // Unmatched: identity false. A statement alone never marks a function
-      // matched. Coverage 0, zero statements.
-      results.push({
-        functionInfo: fn,
-        coverage: 0,
-        matched: false,
-        totalStatements: 0,
-        coveredStatements: 0,
-      });
-      continue;
-    }
-    const coverage = total > 0 ? covered / total : 0;
-    results.push({
-      functionInfo: fn,
-      coverage,
-      matched: true,
-      totalStatements: total,
-      coveredStatements: covered,
-    });
-  }
-  return results;
+  return buildFileFunctionCoverage(
+    fns,
+    matchedFlags,
+    totalStatements,
+    coveredStatements,
+  );
 }
 
 /**
