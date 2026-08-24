@@ -1034,7 +1034,9 @@ export function runSelfScoreGate(
   ];
   // The freshness pre-check guards the very coverage file the CLI will read,
   // so it must use the run's --coverage argument, not the default path.
-  const coverageArgIndex = cliArgs.indexOf("--coverage");
+  // Match the production parser's left-to-right override semantics: when an
+  // argument is repeated, the final --coverage value is the file the CLI uses.
+  const coverageArgIndex = cliArgs.lastIndexOf("--coverage");
   const coverageFile =
     coverageArgIndex >= 0 && cliArgs[coverageArgIndex + 1] !== undefined
       ? path.resolve(cwd, cliArgs[coverageArgIndex + 1]!)

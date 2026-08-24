@@ -989,6 +989,9 @@ describe("runSelfScoreGate: real CLI execution (end to end)", () => {
       // that exact file rather than silently falling back to the repository
       // default. Remove a low-complexity tracked source: the CLI can still
       // exit 0, but the gate must reject the incomplete coverage inventory.
+      // Include the complete default coverage first. The production parser
+      // resolves repeated options left-to-right, so the incomplete alternate
+      // file below is the effective final --coverage value the gate must audit.
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "self-score-corrupt-"));
       try {
         const alternateCoverage = path.join(tempDir, "coverage-final.json");
@@ -1005,6 +1008,7 @@ describe("runSelfScoreGate: real CLI execution (end to end)", () => {
         const outcome = runSelfScoreGate({
           args: [
             "npx", "tsx", path.join(REPO_ROOT, "src/cli.ts"), "src",
+            "--coverage", REPO_COVERAGE,
             "--coverage", alternateCoverage, "--threshold", "8", "--json",
           ],
         });
