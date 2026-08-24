@@ -983,36 +983,37 @@ describe("runSelfScoreGate: real CLI execution (end to end)", () => {
   );
 
   it.skipIf(!HAS_REPO_COVERAGE)(
-    "fails closed when the real CLI report is incomplete for the current coverage",
+    "fails closed when an alternate real CLI coverage file omits a tracked source",
     () => {
-      // Corrupt the live coverage file by removing one in-src file's entry
-      // (src/crap.ts, which is tracked by the coverage file and whose rows
-      // stay coverage-matched in the resulting report), run the REAL CLI
-      // against it, and require the gate to reject the report: the report
-      // still carries rows for the file, but the coverage file no longer
-      // tracks it, so the coverage-entries-vs-rows comparison must fail.
-      const original = fs.readFileSync(REPO_COVERAGE, "utf8");
+      // The controlled-run API accepts --coverage, so validation must inspect
+      // that exact file rather than silently falling back to the repository
+      // default. Remove a low-complexity tracked source: the CLI can still
+      // exit 0, but the gate must reject the incomplete coverage inventory.
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "self-score-corrupt-"));
       try {
-        const coverage = JSON.parse(original) as Record<string, unknown>;
-        const removedKey = Object.keys(coverage).find((k) =>
-          k.endsWith("src/crap.ts"),
+        const alternateCoverage = path.join(tempDir, "coverage-final.json");
+        const coverage = JSON.parse(fs.readFileSync(REPO_COVERAGE, "utf8")) as Record<string, unknown>;
+        const removedKey = Object.keys(coverage).find((key) =>
+          key.endsWith("src/path-identity.ts"),
         );
         expect(removedKey).toBeDefined();
         delete coverage[removedKey!];
-        fs.writeFileSync(REPO_COVERAGE, JSON.stringify(coverage, null, 2));
+        fs.writeFileSync(alternateCoverage, JSON.stringify(coverage, null, 2));
+        const now = new Date();
+        fs.utimesSync(alternateCoverage, now, now);
 
-        const outcome = runSelfScoreGate();
+        const outcome = runSelfScoreGate({
+          args: [
+            "npx", "tsx", path.join(REPO_ROOT, "src/cli.ts"), "src",
+            "--coverage", alternateCoverage, "--threshold", "8", "--json",
+          ],
+        });
         expect(outcome.code).toBe(1);
-        expect(outcome.error).not.toBeNull();
         expect(outcome.error).toContain("self-score report validation failed");
-        // The failure must point at the now-untracked coverage file: the
-        // gate compares the coverage entries against the files the current
-        // run is EXPECTED to track (vitest config's coverage excludes), so
-        // the missing entry for src/crap.ts is the provable defect.
-        expect(outcome.error).toContain("src/crap.ts");
+        expect(outcome.error).toContain("src/path-identity.ts");
         expect(outcome.error).toContain("missing an entry");
       } finally {
-        fs.writeFileSync(REPO_COVERAGE, original);
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
     },
     E2E_TIMEOUT_MS,

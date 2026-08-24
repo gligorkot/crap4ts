@@ -941,8 +941,8 @@ function readVitestCoverageExclude(
 export function buildGateContext(
   sourceFiles: readonly string[],
   cwd: string = REPO_ROOT,
+  coverageFile: string = path.join(cwd, "coverage", "coverage-final.json"),
 ): SelfScoreGateContext | string {
-  const coverageFile = path.join(cwd, "coverage", "coverage-final.json");
   let coveragePaths: string[];
   try {
     const coverage = readCoverage(coverageFile);
@@ -1084,7 +1084,7 @@ export function runSelfScoreGate(
     );
   }
 
-  const context = buildGateContext(sourceFiles, cwd);
+  const context = buildGateContext(sourceFiles, cwd, coverageFile);
   if (typeof context === "string") {
     return failure(context);
   }
