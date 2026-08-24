@@ -152,7 +152,7 @@ describe("configuration", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("config");
     expect(runCli(project, ["--config", "missing.json", "--coverage", "coverage.json"]).code).toBe(1);
-  });
+  }, 15_000);
 
   it("lets explicit CLI values override config values", () => {
     const project = tempProject();

@@ -169,6 +169,11 @@ describe("renderMarkdownReport", () => {
     expect(escapeCell("www.evil.example/index.ts")).toBe(literalCode("www\\.evil\\.example\\/index\\.ts"));
     expect(escapeCell("_owned_")).toBe(literalCode("\\_owned\\_"));
     expect(escapeCell("__owned__")).toBe(literalCode("\\_\\_owned\\_\\_"));
+    for (const sha of [
+      "bec551d20a25dc9aafedd47b3a6a23cdd902f91a",
+      "bec551d",
+      "prefix bec551d suffix",
+    ]) expect(escapeCell(sha)).toBe(literalCode(sha));
     expect(escapeCell("normal_name")).toBe("normal_name");
   });
 
