@@ -401,24 +401,21 @@ violations as report-only. This visibility period is temporary: eventual
 threshold-8 enforcement requires remediation (coverage and/or refactoring),
 not silently raising the default threshold.
 
-The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the CLI
-from source against this repo's own `src/` directory using the coverage
-generated in the previous step. It asserts that:
-1. The CLI exits 2 (threshold exceeded).
-2. JSON rows named `parseArgs` and `main` exist in the output.
-3. Those rows are unmatched/uncovered (coverage 0) and exceed the threshold.
-4. No unexpected functions breach the threshold (unexpected-only breaches
-   are rejected).
-
-The breach is expected because `cli.ts` functions (`parseArgs`, `main`)
-have high cyclomatic complexity and no direct test coverage (they are
-exercised via subprocess in tests, which V8 does not attribute to the
-source file). The pure validation logic is in
-`src/self-score-helpers.ts` and has unit test coverage via
-`test/self-score.test.ts`. On success, its output records the maximum CRAP
-score and the exact expected breached rows with each row's name, CRAP score,
-coverage, and threshold. The script exits 0 only when the expected breach
-occurs and is fully explained; it exits non-zero otherwise.
+The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the
+real source CLI (`tsx src/cli.ts`) against this repo's own `src/` directory
+using the fresh coverage generated in the previous step, at `--threshold 8
+--json`. It is the repository's honest own-source gate: it fails closed on
+missing or stale coverage, on uninterpretable CLI results, or on any report
+it cannot prove is a structurally valid, summary-consistent, own-source
+result of the current tree, and then passes (exit 0) only when **zero rows
+have a CRAP score strictly above their applicable threshold (threshold 8)**
+— the breach counts are recomputed from the rows, never trusted from the
+summary. On success it prints an audit block with the function count,
+coverage-matched count, maximum CRAP, and the breached-row count (0). Any
+other outcome — including any breached row — exits 1. The previous premise
+that the gate expects a threshold-30 breach from `parseArgs`/`main` is
+retired: after the threshold-8 remediation the own-source report is clean,
+so the gate now passes exactly when it stays clean.
 
 ## Current v1 support and limitations
 
@@ -458,7 +455,7 @@ npm ci              # install dependencies exactly as CI does
 npm run typecheck   # tsc --noEmit
 npm run coverage    # Vitest test execution used by CI; generates coverage/coverage-final.json
 npm run build       # compile to dist/ (for npm publishing)
-npm run self-score  # assert expected threshold breach and print audit evidence
+npm run self-score  # pass only when zero own-source rows strictly exceed threshold 8, and print audit evidence
 
 # Optional faster local test run when coverage output is not needed:
 npm test            # vitest run (CLI tests invoke src/cli.ts via tsx)

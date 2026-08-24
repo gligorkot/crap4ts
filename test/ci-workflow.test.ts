@@ -48,11 +48,14 @@ describe("CI CRAP report", () => {
 
   it("keeps the strict self-score audit after the report", () => {
     const reportStep = workflow.indexOf("name: CRAP report (threshold 8; report-only)");
-    const selfScoreStep = workflow.indexOf("name: Self-score (assert expected threshold breach)");
+    const selfScoreStep = workflow.indexOf("name: Self-score (own-source gate at threshold 8)");
 
     expect(reportStep).toBeGreaterThan(-1);
     expect(selfScoreStep).toBeGreaterThan(reportStep);
-    expect(workflow).toContain("temporary threshold of 30");
+    // The self-score step documents the honest own-source gate: the fresh
+    // own-source report passes only when no CRAP row is strictly above
+    // threshold 8 (the retired threshold-30 expected-breach premise is gone).
+    expect(workflow).toContain("strictly above threshold 8");
   });
 
   // Executable test: run the actual step script under bash with a fake CLI.

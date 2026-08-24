@@ -46,7 +46,7 @@ jobs:
           trap 'rm -f "$candidate_summary" "$report_output"' EXIT
 
           {
-            echo "> ⚠️ **Temporary policy:** CRAP violations above the default threshold of 8 are reported, not enforced. The self-score audit below uses a temporary threshold of 30 while the CLI is refactored."
+            echo "> ⚠️ **Temporary policy:** CRAP violations above the default threshold of 8 are reported, not enforced in CI. The self-score audit below enforces the repository's own threshold 8 and passes only when zero own-source rows have a CRAP score strictly above it."
             echo
           } > "$candidate_summary"
 
@@ -71,15 +71,18 @@ jobs:
             exit "$status"
           fi
 
-      - name: Self-score (assert expected threshold breach)
+      - name: Self-score (own-source gate at threshold 8)
         run: npm run self-score
-        # The self-score script (scripts/self-score.ts, run via tsx) asserts
-        # that the CLI exits 2 (threshold exceeded) when run against this
-        # repo's own source and coverage. The breach is expected: cli.ts
-        # functions (parseArgs, main) have high cyclomatic complexity and no
-        # direct test coverage (they are exercised via subprocess in tests,
-        # which V8 does not attribute to the source file). The script exits 0
-        # only when the expected breach occurs; it exits non-zero if the CLI
-        # exits 0 (no breach — coverage missing), exits 1 (invalid input), or
-        # produces any other unexpected error. This replaces the previous
-        # bare `continue-on-error: true` which masked all failures.
+        # The self-score script (scripts/self-score.ts, run via tsx) runs the
+        # real source CLI (tsx src/cli.ts) against this repo's own src/ with
+        # the fresh coverage/coverage-final.json at --threshold 8 --json and
+        # validates the JSON report fail closed: the coverage must exist and
+        # be fresh, the report must be a structurally valid own-source result
+        # of the current tree, and its summary must be re-verified against
+        # the rows. It passes (exit 0) only when no row's CRAP score is
+        # strictly above threshold 8; otherwise it prints every breached row
+        # and exits 1. It exits non-zero on missing/stale coverage,
+        # uninterpretable CLI results, or an unprovable report. The retired
+        # premise — that the gate expects a threshold-30 breach with
+        # parseArgs/main rows — no longer applies: the threshold-8
+        # remediation left the own-source report clean.
