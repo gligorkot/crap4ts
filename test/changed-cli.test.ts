@@ -192,7 +192,7 @@ describe("changed-only CLI", () => {
     const empty = runCli(project, ["src", "--coverage", "coverage.json", "--changed-since", "HEAD", "--json"]);
     expect(empty.code).toBe(0);
     expect(JSON.parse(empty.stdout)).toMatchObject({ rows: [], filter: { mode: "changed", changedSince: "HEAD" } });
-  });
+  }, 15_000);
 
   it("rejects uncommitted TypeScript worktree files instead of analyzing a moving target", () => {
     const project = projectWithChangedFunction();

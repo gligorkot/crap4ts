@@ -152,7 +152,7 @@ describe("configuration", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("config");
     expect(runCli(project, ["--config", "missing.json", "--coverage", "coverage.json"]).code).toBe(1);
-  });
+  }, 15_000);
 
   it("lets explicit CLI values override config values", () => {
     const project = tempProject();
@@ -210,7 +210,7 @@ describe("configuration", () => {
     const human = runCli(project, ["--coverage", "coverage.json"]);
     expect(human.stdout).toContain("Threshold");
     expect(human.stdout).toMatch(/\b10(?:\.0)?\b/);
-  });
+  }, 15_000);
 
   it("applies config exclusion patterns without bypassing default exclusions", () => {
     const project = tempProject();

@@ -32,28 +32,42 @@ jobs:
       - name: CRAP report (threshold 8; report-only)
         shell: bash
         run: |
+          # Buffer the COMPLETE candidate summary (policy block + Markdown
+          # report + expected-exit note) in a temp file. Only after the CLI
+          # exits 0 or 2 do we append it to $GITHUB_STEP_SUMMARY, so an
+          # unexpected exit leaves an initially populated summary untouched.
+          #
+          # Report-only semantics:
+          # - exit 2 is the expected threshold breach: the report is published;
+          # - any other nonzero exit fails the job: nothing is appended to the
+          #   summary and captured output goes only to stderr/job log.
+          candidate_summary="$(mktemp)"
+          report_output="$(mktemp)"
+          trap 'rm -f "$candidate_summary" "$report_output"' EXIT
+
           {
-            echo "## CRAP report (threshold 8; report-only)"
-            echo
             echo "> ⚠️ **Temporary policy:** CRAP violations above the default threshold of 8 are reported, not enforced. The self-score audit below uses a temporary threshold of 30 while the CLI is refactored."
             echo
-            echo '```text'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > "$candidate_summary"
 
           set +e
-          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 >> "$GITHUB_STEP_SUMMARY" 2>&1
+          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown > "$report_output"
           status=$?
           set -e
 
-          {
-            echo '```'
-            echo
+          if [[ "$status" -eq 0 || "$status" -eq 2 ]]; then
+            cat "$report_output" >> "$candidate_summary"
+            echo >> "$candidate_summary"
             if [[ "$status" -eq 2 ]]; then
-              echo "> ℹ️ The threshold-8 report exited 2 as expected; violations are report-only for now."
+              {
+                echo
+                echo "> ℹ️ The threshold-8 report exited 2 as expected; violations are report-only for now."
+              } >> "$candidate_summary"
             fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$status" -ne 0 && "$status" -ne 2 ]]; then
+            cat "$candidate_summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "CRAP report failed unexpectedly with exit $status; report follows:" >&2
+            cat "$report_output" >&2
             exit "$status"
           fi
 

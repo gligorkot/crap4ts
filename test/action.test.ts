@@ -191,8 +191,9 @@ describe("action step semantics (controlled local CLI fixture)", () => {
     expect(result.summary).toContain("PASS");
   });
 
-  it("renders dynamic file names as escaped literal code spans", () => {
+  it("renders ordinary file names as readable plain text", () => {
     const result = runStep("8");
-    expect(result.summary).toMatch(/`[^`]*sample\\.ts[^`]*`/);
+    expect(result.summary).toContain("src/sample.ts");
+    expect(result.summary).not.toContain("`src/sample.ts`");
   });
 });

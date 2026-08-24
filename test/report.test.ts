@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildReport, buildReportRows, sortRows, renderHumanReport, renderJsonReport, renderMarkdownReport } from "../src/report.js";
+import { buildReport, buildReportRows, escapeCell, literalCode, sortRows, renderHumanReport, renderJsonReport, renderMarkdownReport } from "../src/report.js";
 import type { FunctionCoverage } from "../src/coverage.js";
 import type { FunctionInfo } from "../src/complexity.js";
 
@@ -148,13 +148,37 @@ describe("renderMarkdownReport", () => {
   it("marks breached rows with a warning emoji", () => {
     const report = buildReport([makeFn("bad", 4, 1, 1, 0)], 8);
     const text = renderMarkdownReport(report);
-    expect(text).toContain("⚠️ `bad`");
+    expect(text).toContain("⚠️ bad");
   });
 
   it("renders a pass gate when nothing breaches", () => {
     const report = buildReport([makeFn("ok", 1, 1, 1, 1)], 8);
     const text = renderMarkdownReport(report);
     expect(text).toContain("**Gate:** ✅ PASS");
+  });
+
+  it("keeps ordinary function names and paths plain", () => {
+    const report = buildReport([makeFn("normal_name", 2, 1, 1, 1)], 8);
+    const text = renderMarkdownReport(report);
+    expect(text).toContain("| normal_name | /src/normal_name.ts |");
+    expect(text).not.toContain("`normal_name`");
+    expect(text).not.toContain("`/src/normal_name.ts`");
+  });
+
+  it("routes GFM autolinks and underscore emphasis forms through literal code", () => {
+    expect(escapeCell("www.evil.example/index.ts")).toBe(literalCode("www\\.evil\\.example\\/index\\.ts"));
+    expect(escapeCell("_owned_")).toBe(literalCode("\\_owned\\_"));
+    expect(escapeCell("__owned__")).toBe(literalCode("\\_\\_owned\\_\\_"));
+    for (const sha of [
+      "bec551d20a25dc9aafedd47b3a6a23cdd902f91a",
+      "bec551d",
+      "prefix bec551d suffix",
+      "GH-8",
+      "gh-8",
+      "prefix GH-8 suffix",
+      "/src/GH-8.ts",
+    ]) expect(escapeCell(sha)).toBe(literalCode(sha.replace(/[!-/:-@[-`{-~]/g, "\\$&")));
+    expect(escapeCell("normal_name")).toBe("normal_name");
   });
 
   it("escapes pipe characters in cell values", () => {

@@ -387,10 +387,10 @@ jobs:
       - run: npm run build
       - name: CRAP report (threshold 8; report-only)
         run: |
-          # Append the built CLI's human-readable report to $GITHUB_STEP_SUMMARY.
+          # Append the built CLI's Markdown report to $GITHUB_STEP_SUMMARY.
           # Exit 2 is accepted only as the expected report-only threshold breach;
-          # every other nonzero exit fails the job.
-          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8
+          # every other nonzero exit fails the job and never publishes a summary.
+          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown
       - run: npm run self-score
 ```
 

@@ -230,23 +230,31 @@ export function literalCode(value: string): string {
 }
 
 /**
- * Render dynamic content (function names, file paths) as literal Markdown
- * text so it cannot form links, HTML, emphasis, or table structure:
+ * Render dynamic table content safely without making ordinary TypeScript names
+ * and paths visually noisy. Common function/path characters are plain text;
+ * values containing Markdown/HTML syntax become literal code instead.
  *
- * - backslash-escape every ASCII punctuation character, which neutralizes
- *   pipes (table cells), brackets/parentheses (links), asterisks/underscores
- *   (emphasis), and code delimiters;
- * - replace CR/LF with spaces so a name can never start a new line/block
- *   (e.g. inject an HTML block or heading);
- * - wrap in backticks after stripping any embedded backtick-like sequences,
- *   which makes GitHub render the remainder as inline code — no raw HTML.
+ * Pipes are always escaped because GitHub parses them as table-cell boundaries
+ * even when they appear inside an inline code span. Control characters cannot
+ * create a new row or block.
  */
+function isPlainTableText(value: string): boolean {
+  if (!/^[A-Za-z0-9._/ -]+$/.test(value)) return false;
+  // GFM extended autolinks `www.*` and treats underscore-delimited text as
+  // emphasis/strong. Keep ordinary `normal_name` readable, but route forms
+  // that can change rendered meaning through the literal-code path.
+  if (/www\./i.test(value)) return false;
+  if (/\b[0-9a-f]{7,40}\b/i.test(value)) return false;
+  if (/gh-\d+/i.test(value)) return false;
+  return !/(^|[^A-Za-z0-9])_{1,3}.+_{1,3}($|[^A-Za-z0-9])/.test(value);
+}
+
+/** Render a dynamic table cell without permitting GFM interpretation. */
 export function escapeCell(value: string): string {
-  // Remove control characters (including CR/LF/TAB) entirely.
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
-  // Escape all ASCII punctuation so it cannot act as Markdown syntax.
+  if (isPlainTableText(cleaned)) return cleaned;
   const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
-  return `\`${escaped}\``;
+  return literalCode(escaped);
 }
 
 /**

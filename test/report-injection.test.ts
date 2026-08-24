@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReport, renderMarkdownReport } from "../src/report.js";
+import { buildReport, literalCode, renderMarkdownReport } from "../src/report.js";
 import type { FunctionCoverage } from "../src/coverage.js";
 import type { FunctionInfo } from "../src/complexity.js";
 
@@ -45,8 +45,9 @@ describe("renderMarkdownReport injection resistance", () => {
     const md = renderMarkdownReport(report);
     const rowLine = md.split("\n").find((l) => l.startsWith(`| \`${hostile.slice(0, 4)}`) || l.includes("\\|") || l.startsWith("| ⚠️"));
 
-    // The hostile value appears exactly once, inside an escaped code span.
-    expect(md).toContain(`\`${hostile.replace(/[!-/:-@[-`{-~]/g, "\\$&").replace(/[\u0000-\u001f\u007f]/g, " ")}\``);
+    // Unsafe content is rendered as a literal code span; punctuation is
+    // escaped so the hostile value cannot add Markdown table columns.
+    expect(md).toContain(literalCode(hostile.replace(/[!-/:-@[-`{-~]/g, "\\$&").replace(/[\u0000-\u001f\u007f]/g, " ")));
 
     // No raw un-escaped hostile markup survives in the table row.
     if (rowLine !== undefined) {
@@ -77,9 +78,9 @@ describe("renderMarkdownReport injection resistance", () => {
     expect((dataRow as string).match(/(?<!\\)\|/g)).toHaveLength(8);
   });
 
-  it("escapes backticks so adversarial names cannot close the surrounding code span", () => {
+  it("uses a longer delimiter when unsafe values contain backticks", () => {
     const md = renderMarkdownReport(buildReport([makeFn("x`y", 4, 0)], 8));
-    expect(md).toContain("`x\\`y`");
+    expect(md).toContain(literalCode("x\\`y"));
   });
 
   it("neutralizes link syntax in file paths too", () => {
