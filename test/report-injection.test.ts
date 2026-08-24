@@ -45,7 +45,8 @@ describe("renderMarkdownReport injection resistance", () => {
     const md = renderMarkdownReport(report);
     const rowLine = md.split("\n").find((l) => l.startsWith(`| \`${hostile.slice(0, 4)}`) || l.includes("\\|") || l.startsWith("| ⚠️"));
 
-    // The hostile value appears exactly once, inside an escaped code span.
+    // Unsafe content is rendered as a literal code span; punctuation is
+    // escaped so the hostile value cannot add Markdown table columns.
     expect(md).toContain(`\`${hostile.replace(/[!-/:-@[-`{-~]/g, "\\$&").replace(/[\u0000-\u001f\u007f]/g, " ")}\``);
 
     // No raw un-escaped hostile markup survives in the table row.

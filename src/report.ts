@@ -230,21 +230,17 @@ export function literalCode(value: string): string {
 }
 
 /**
- * Render dynamic content (function names, file paths) as literal Markdown
- * text so it cannot form links, HTML, emphasis, or table structure:
+ * Render dynamic table content safely without making ordinary TypeScript names
+ * and paths visually noisy. Common function/path characters are plain text;
+ * values containing Markdown/HTML syntax become literal code instead.
  *
- * - backslash-escape every ASCII punctuation character, which neutralizes
- *   pipes (table cells), brackets/parentheses (links), asterisks/underscores
- *   (emphasis), and code delimiters;
- * - replace CR/LF with spaces so a name can never start a new line/block
- *   (e.g. inject an HTML block or heading);
- * - wrap in backticks after stripping any embedded backtick-like sequences,
- *   which makes GitHub render the remainder as inline code — no raw HTML.
+ * Pipes are always escaped because GitHub parses them as table-cell boundaries
+ * even when they appear inside an inline code span. Control characters cannot
+ * create a new row or block.
  */
 export function escapeCell(value: string): string {
-  // Remove control characters (including CR/LF/TAB) entirely.
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
-  // Escape all ASCII punctuation so it cannot act as Markdown syntax.
+  if (/^[A-Za-z0-9._/ -]+$/.test(cleaned)) return cleaned;
   const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
   return `\`${escaped}\``;
 }
