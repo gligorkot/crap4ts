@@ -2,7 +2,7 @@ name: "crap4ts CRAP report"
 description: >
   Renders a PR-friendly Markdown CRAP report from existing Istanbul coverage
   into $GITHUB_STEP_SUMMARY and exposes breach outputs. Requires
-  @gligorkot/crap4ts to already be installed as a dev dependency (the action
+  @gligor/crap4ts to already be installed as a dev dependency (the action
   runs only the locally installed CLI) and coverage to already exist (e.g.
   produced by an earlier step); it never installs dependencies, resolves
   global binaries, or generates coverage itself. Exits 2 when the CRAP
@@ -53,7 +53,7 @@ runs:
         # no npx, no npm install, no fetching of any kind.
         CLI="$GITHUB_WORKSPACE/node_modules/.bin/crap4ts"
         if [[ ! -x "$CLI" ]]; then
-          echo "::error::crap4ts CLI not found at $CLI. Install it first with 'npm install --save-dev @gligorkot/crap4ts' before using this action."
+          echo "::error::crap4ts CLI not found at $CLI. Install it first with 'npm install --save-dev @gligor/crap4ts' before using this action."
           exit 1
         fi
 
@@ -97,9 +97,9 @@ runs:
         # Render the Markdown summary from the same JSON so both formats come
         # from a single successful run. The renderer comes from the already
         # installed scoped package — an action checkout does not ship dist/.
-        REPORT_CJS="$GITHUB_WORKSPACE/node_modules/@gligorkot/crap4ts/dist/cjs/report.js"
+        REPORT_CJS="$GITHUB_WORKSPACE/node_modules/@gligor/crap4ts/dist/cjs/report.js"
         if [[ ! -f "$REPORT_CJS" ]]; then
-          echo "::error::Renderer not found at $REPORT_CJS. Install @gligorkot/crap4ts as a dev dependency before using this action."
+          echo "::error::Renderer not found at $REPORT_CJS. Install @gligor/crap4ts as a dev dependency before using this action."
           exit 1
         fi
         JSON_FILE="$json_file" REPORT_CJS="$REPORT_CJS" node -e '

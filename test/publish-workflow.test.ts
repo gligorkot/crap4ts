@@ -44,7 +44,7 @@ describe("package metadata", () => {
   });
 
   it("publishes the scoped name", () => {
-    expect(pkg.name).toBe("@gligorkot/crap4ts");
+    expect(pkg.name).toBe("@gligor/crap4ts");
   });
 });
 
@@ -57,7 +57,7 @@ describe("README publishing docs", () => {
   });
 
   it("documents the exact npm trusted-publisher fields", () => {
-    expect(readme).toContain("Organization/user `gligorkot`");
+    expect(readme).toContain("Organization/user `gligor`");
     expect(readme).toContain("Repository\n   `crap4ts`");
     expect(readme).toContain("Workflow filename `publish.yml` (filename only)");
     expect(readme).toContain("Allowed\n   actions `npm publish`");
@@ -70,8 +70,8 @@ describe("README publishing docs", () => {
 
 describe("README config/import examples", () => {
   it("imports defineConfig from the scoped package everywhere", () => {
-    expect(readme).not.toMatch(/from "(?!@gligorkot\/)crap4ts"/);
-    expect(readme.match(/from "@gligorkot\/crap4ts";/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(readme).not.toMatch(/from "(?!@gligor\/)crap4ts"/);
+    expect(readme.match(/from "@gligor\/crap4ts";/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it("never references an unscoped crap4ts package import or install", () => {

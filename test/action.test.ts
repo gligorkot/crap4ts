@@ -38,14 +38,14 @@ describe("composite action", () => {
   });
 
   it("loads the renderer from the installed scoped package, never from the action checkout", () => {
-    expect(action).toContain("$GITHUB_WORKSPACE/node_modules/@gligorkot/crap4ts/dist/cjs/report.js");
+    expect(action).toContain("$GITHUB_WORKSPACE/node_modules/@gligor/crap4ts/dist/cjs/report.js");
     expect(action).not.toContain("GITHUB_ACTION_PATH");
     expect(action).toContain("Renderer not found");
   });
 
   it("fails with a clear error when the installed CLI is absent", () => {
     expect(action).toContain("crap4ts CLI not found at");
-    expect(action).toContain("npm install --save-dev @gligorkot/crap4ts");
+    expect(action).toContain("npm install --save-dev @gligor/crap4ts");
   });
 
   it("writes the markdown report to GITHUB_STEP_SUMMARY from a single CLI run's JSON", () => {
@@ -108,7 +108,7 @@ describe("action step semantics (controlled local CLI fixture)", () => {
       // node_modules, exactly as npm lays it out.
       const rendererSourceDir = join(projectRoot, "dist", "cjs");
       expect(existsSync(join(rendererSourceDir, "report.js"))).toBe(true); // produced by `npm run build` before tests
-      const rendererTargetDir = join(workdir, "node_modules", "@gligorkot", "crap4ts", "dist", "cjs");
+      const rendererTargetDir = join(workdir, "node_modules", "@gligor", "crap4ts", "dist", "cjs");
       mkdirSync(rendererTargetDir, { recursive: true });
       for (const file of readdirSync(rendererSourceDir)) {
         if (file.endsWith(".js")) copyFileSync(join(rendererSourceDir, file), join(rendererTargetDir, file));
