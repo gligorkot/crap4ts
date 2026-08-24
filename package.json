@@ -1,5 +1,5 @@
 {
-  "name": "crap4ts",
+  "name": "@gligorkot/crap4ts",
   "version": "0.1.0",
   "description": "CRAP metric analyzer for TypeScript/TSX source from V8 coverage",
   "keywords": [
@@ -32,19 +32,21 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "build": "tsc && tsc -p tsconfig.cjs.json && node scripts/write-cjs-package-json.mjs",
-    "build:action": "node scripts/bundle-action.mjs",
     "self-score": "tsx scripts/self-score.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "^4.1.0",
-    "esbuild": "^0.28.2",
     "tsx": "^4.23.12",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0"

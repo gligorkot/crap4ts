@@ -88,13 +88,13 @@ describe("configuration", () => {
       cwd: project, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     });
     fs.writeFileSync(path.join(project, "crap4ts.config.ts"), [
-      'import { defineConfig } from "crap4ts";',
+      'import { defineConfig } from "@gligorkot/crap4ts";',
       "",
       "export default defineConfig({ version: 1, src: 'src', threshold: 100 });",
       "",
     ].join("\n"));
 
-    const installedCli = path.join(project, "node_modules", "crap4ts", "dist", "cli.js");
+    const installedCli = path.join(project, "node_modules", "@gligorkot", "crap4ts", "dist", "cli.js");
     const result = runCli(project, ["--coverage", "coverage.json", "--json"], true, installedCli);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout).summary.threshold).toBe(100);

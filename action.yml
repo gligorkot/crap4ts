@@ -1,10 +1,12 @@
 name: "crap4ts CRAP report"
 description: >
   Renders a PR-friendly Markdown CRAP report from existing Istanbul coverage
-  into $GITHUB_STEP_SUMMARY and exposes breach outputs. Requires coverage to
-  already exist (e.g. produced by an earlier step); it does not install
-  dependencies or generate coverage itself. Exits 2 when the CRAP threshold
-  is breached, 0 on pass.
+  into $GITHUB_STEP_SUMMARY and exposes breach outputs. Requires
+  @gligorkot/crap4ts to already be installed as a dev dependency (the action
+  runs only the locally installed CLI) and coverage to already exist (e.g.
+  produced by an earlier step); it never installs dependencies, resolves
+  global binaries, or generates coverage itself. Exits 2 when the CRAP
+  threshold is breached, 0 on pass.
 
 branding:
   icon: "bar-chart-2"
@@ -47,11 +49,11 @@ runs:
       run: |
         set -euo pipefail
 
-        # Run the self-contained bundled CLI committed under action/.
-        # No package resolution, no auto-install, no fetching, no caller deps.
-        CLI="$GITHUB_ACTION_PATH/action/action.cjs"
-        if [[ ! -f "$CLI" ]]; then
-          echo "::error::crap4ts action is missing its bundled CLI ($CLI). It must be committed under action/ at the tag/ref used by this action (regenerate with 'npm run build:action')."
+        # Run ONLY the locally installed CLI binary. No PATH/global lookup,
+        # no npx, no npm install, no fetching of any kind.
+        CLI="$GITHUB_WORKSPACE/node_modules/.bin/crap4ts"
+        if [[ ! -x "$CLI" ]]; then
+          echo "::error::crap4ts CLI not found at $CLI. Install it first with 'npm install --save-dev @gligorkot/crap4ts' before using this action."
           exit 1
         fi
 
@@ -71,7 +73,7 @@ runs:
         # Exit code 2 means the threshold was breached — expected here.
         # Any other non-zero status propagates unchanged.
         set +e
-        node "$CLI" "$SOURCE_PATH" \
+        "$CLI" "$SOURCE_PATH" \
           --coverage "$COVERAGE_FILE" \
           --threshold "$CRAP_THRESHOLD" \
           --format json > "$json_file"
@@ -93,7 +95,18 @@ runs:
         } >> "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
 
         # Render the Markdown summary from the same JSON so both formats come
-        # from a single successful run.
-        node "$GITHUB_ACTION_PATH/action/summary.cjs" "$json_file"
+        # from a single successful run. The renderer comes from the already
+        # installed scoped package — an action checkout does not ship dist/.
+        REPORT_CJS="$GITHUB_WORKSPACE/node_modules/@gligorkot/crap4ts/dist/cjs/report.js"
+        if [[ ! -f "$REPORT_CJS" ]]; then
+          echo "::error::Renderer not found at $REPORT_CJS. Install @gligorkot/crap4ts as a dev dependency before using this action."
+          exit 1
+        fi
+        JSON_FILE="$json_file" REPORT_CJS="$REPORT_CJS" node -e '
+          const { appendFileSync, readFileSync } = require("node:fs");
+          const { renderMarkdownReport } = require(process.env.REPORT_CJS);
+          const report = JSON.parse(readFileSync(process.env.JSON_FILE, "utf8"));
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderMarkdownReport(report) + "\n\n");
+        '
 
         exit "$status"
