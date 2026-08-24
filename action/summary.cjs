@@ -10,6 +10,15 @@ function shortenPath(filePath) {
   if (parts.length <= 3) return filePath;
   return ".../" + parts.slice(-3).join("/");
 }
+function literalCode(value) {
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  let longestRun = 0;
+  for (const match of cleaned.match(/`+/g) ?? []) {
+    if (match.length > longestRun) longestRun = match.length;
+  }
+  const fence = "`".repeat(longestRun + 1);
+  return `${fence} ${cleaned} ${fence}`;
+}
 function escapeCell(value) {
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
   const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
@@ -20,7 +29,7 @@ function renderMarkdownReport(report2) {
   lines.push("## CRAP Report");
   lines.push("");
   if (report2.filter !== void 0) {
-    lines.push(`Changed-only mode: since \`${report2.filter.changedSince}\` (merge base \`${report2.filter.mergeBase}\`, ${report2.filter.changedFileCount} changed file(s))`);
+    lines.push(`Changed-only mode: since ${literalCode(report2.filter.changedSince)} (merge base ${literalCode(report2.filter.mergeBase)}, ${report2.filter.changedFileCount} changed file(s))`);
     lines.push("");
   }
   if (report2.rows.length === 0) {

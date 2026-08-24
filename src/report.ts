@@ -210,6 +210,26 @@ export function renderJsonReport(report: CrapReport): string {
 }
 
 /**
+ * Render an untrusted value as a literal inline code span that cannot be
+ * broken out of or used to inject HTML:
+ *
+ * - replace control characters (including CR/LF/TAB) with spaces so the
+ *   value can never start a new line or block;
+ * - choose a backtick delimiter strictly longer than the longest embedded
+ *   backtick run, so no sequence inside the value can close the span early.
+ */
+export function literalCode(value: string): string {
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  let longestRun = 0;
+  for (const match of cleaned.match(/`+/g) ?? []) {
+    if (match.length > longestRun) longestRun = match.length;
+  }
+  const fence = "`".repeat(longestRun + 1);
+  // Pad with spaces so boundary backticks cannot fuse with the delimiters.
+  return `${fence} ${cleaned} ${fence}`;
+}
+
+/**
  * Render dynamic content (function names, file paths) as literal Markdown
  * text so it cannot form links, HTML, emphasis, or table structure:
  *
@@ -237,7 +257,7 @@ export function renderMarkdownReport(report: CrapReport): string {
   lines.push("## CRAP Report");
   lines.push("");
   if (report.filter !== undefined) {
-    lines.push(`Changed-only mode: since \`${report.filter.changedSince}\` (merge base \`${report.filter.mergeBase}\`, ${report.filter.changedFileCount} changed file(s))`);
+    lines.push(`Changed-only mode: since ${literalCode(report.filter.changedSince)} (merge base ${literalCode(report.filter.mergeBase)}, ${report.filter.changedFileCount} changed file(s))`);
     lines.push("");
   }
 

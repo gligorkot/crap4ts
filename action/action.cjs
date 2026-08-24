@@ -211813,6 +211813,15 @@ function shortenPath(filePath) {
 function renderJsonReport(report) {
   return JSON.stringify(report, null, 2);
 }
+function literalCode(value) {
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  let longestRun = 0;
+  for (const match of cleaned.match(/`+/g) ?? []) {
+    if (match.length > longestRun) longestRun = match.length;
+  }
+  const fence = "`".repeat(longestRun + 1);
+  return `${fence} ${cleaned} ${fence}`;
+}
 function escapeCell(value) {
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
   const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
@@ -211823,7 +211832,7 @@ function renderMarkdownReport(report) {
   lines.push("## CRAP Report");
   lines.push("");
   if (report.filter !== void 0) {
-    lines.push(`Changed-only mode: since \`${report.filter.changedSince}\` (merge base \`${report.filter.mergeBase}\`, ${report.filter.changedFileCount} changed file(s))`);
+    lines.push(`Changed-only mode: since ${literalCode(report.filter.changedSince)} (merge base ${literalCode(report.filter.mergeBase)}, ${report.filter.changedFileCount} changed file(s))`);
     lines.push("");
   }
   if (report.rows.length === 0) {
