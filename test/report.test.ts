@@ -173,7 +173,11 @@ describe("renderMarkdownReport", () => {
       "bec551d20a25dc9aafedd47b3a6a23cdd902f91a",
       "bec551d",
       "prefix bec551d suffix",
-    ]) expect(escapeCell(sha)).toBe(literalCode(sha));
+      "GH-8",
+      "gh-8",
+      "prefix GH-8 suffix",
+      "/src/GH-8.ts",
+    ]) expect(escapeCell(sha)).toBe(literalCode(sha.replace(/[!-/:-@[-`{-~]/g, "\\$&")));
     expect(escapeCell("normal_name")).toBe("normal_name");
   });
 

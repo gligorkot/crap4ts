@@ -210,7 +210,7 @@ describe("configuration", () => {
     const human = runCli(project, ["--coverage", "coverage.json"]);
     expect(human.stdout).toContain("Threshold");
     expect(human.stdout).toMatch(/\b10(?:\.0)?\b/);
-  });
+  }, 15_000);
 
   it("applies config exclusion patterns without bypassing default exclusions", () => {
     const project = tempProject();

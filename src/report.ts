@@ -245,6 +245,7 @@ function isPlainTableText(value: string): boolean {
   // that can change rendered meaning through the literal-code path.
   if (/www\./i.test(value)) return false;
   if (/\b[0-9a-f]{7,40}\b/i.test(value)) return false;
+  if (/gh-\d+/i.test(value)) return false;
   return !/(^|[^A-Za-z0-9])_{1,3}.+_{1,3}($|[^A-Za-z0-9])/.test(value);
 }
 
