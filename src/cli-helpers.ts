@@ -128,6 +128,120 @@ const VALUE_OPTIONS = new Set(["--coverage", "--config", "--threshold", "--chang
 const FORMATS: readonly string[] = ["human", "json", "markdown"];
 
 /**
+ * Mutable parse state accumulated by {@link scanArgs} while walking the
+ * argv token list.
+ */
+interface ArgParseState {
+  coverageFile?: string;
+  threshold?: number;
+  configPath?: string;
+  changedSince?: string;
+  format: CliOutputFormat;
+  sourcePaths: string[];
+}
+
+/** Fresh parse state for a new argv: human format, no paths or values. */
+function initialArgParseState(): ArgParseState {
+  return { format: "human", sourcePaths: [] };
+}
+
+/**
+ * Validate that a value-taking option is followed by a value that is not
+ * itself a flag, and return that value.
+ *
+ * @param option - The option the value belongs to (echoed in the message).
+ * @param value - The argument following the option.
+ */
+function requireValue(option: string, value: string | undefined): string {
+  if (value === undefined || value.startsWith("--")) throw new CliArgError(`${option} requires a value`);
+  return value;
+}
+
+/**
+ * Validate and convert a `--threshold` value to a non-negative number.
+ *
+ * @param value - The raw threshold argument.
+ */
+function parseThresholdValue(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new CliArgError(`--threshold must be a non-negative number, got "${value}"`);
+  }
+  return parsed;
+}
+
+/**
+ * Validate a `--format` value against the supported formats.
+ *
+ * @param value - The raw format argument.
+ */
+function assertSupportedFormat(value: string): CliOutputFormat {
+  if (!FORMATS.includes(value)) {
+    throw new CliArgError(`--format must be one of human, json, markdown, got "${value}"`);
+  }
+  return value as CliOutputFormat;
+}
+
+/**
+ * Apply one validated value-taking option to the parse state.
+ *
+ * The `--threshold` arm is the `else`: `VALUE_OPTIONS` contains exactly the
+ * five value options, and the four named arms above cover all of the rest.
+ *
+ * @param state - The accumulating parse state.
+ * @param option - The option being applied.
+ * @param value - The validated option value.
+ */
+function applyValueOption(state: ArgParseState, option: string, value: string): void {
+  if (option === "--coverage") state.coverageFile = value;
+  else if (option === "--config") state.configPath = value;
+  else if (option === "--changed-since") state.changedSince = value;
+  else if (option === "--format") state.format = assertSupportedFormat(value);
+  else state.threshold = parseThresholdValue(value);
+}
+
+/**
+ * Apply one bare (flag) argument to the parse state.
+ *
+ * @param state - The accumulating parse state.
+ * @param arg - The bare argument (never undefined).
+ * @param value - The argument following `arg` (only consulted for value
+ *   options).
+ * @returns True when a value argument was consumed (the caller must skip
+ * past it), false for flags that consume only themselves.
+ */
+function applyBareArg(state: ArgParseState, arg: string, value: string | undefined): boolean {
+  if (VALUE_OPTIONS.has(arg)) {
+    applyValueOption(state, arg, requireValue(arg, value));
+    return true;
+  }
+  if (arg === "--json") state.format = "json";
+  else if (arg === MARKDOWN_ALIAS) state.format = "markdown";
+  else if (arg.startsWith("--")) throw new CliArgError(`unknown option "${arg}"`);
+  else state.sourcePaths.push(arg);
+  return false;
+}
+
+/**
+ * Scan a token list (argv without the node binary and script path) into a
+ * parse state, in the exact historical order and with the exact historical
+ * error precedence: value-presence is checked before per-option validation,
+ * flags are applied left-to-right, and later flags override earlier ones.
+ *
+ * @param args - Tokens after the node binary and script path.
+ * @returns The accumulated parse state.
+ */
+function scanArgs(args: readonly string[]): ArgParseState {
+  const state = initialArgParseState();
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+    if (applyBareArg(state, arg, args[index + 1])) index++;
+  }
+  return state;
+}
+
+/**
  * Parse raw process.argv-style arguments into structured CLI arguments.
  *
  * Throws {@link CliArgError} with the exact user-facing error messages the
@@ -137,48 +251,15 @@ const FORMATS: readonly string[] = ["human", "json", "markdown"];
  * @returns The parsed arguments.
  */
 export function parseArgsPure(argv: readonly string[]): ParsedCliArgs {
-  const args = argv.slice(2);
-  let coverageFile: string | undefined;
-  let threshold: number | undefined;
-  let configPath: string | undefined;
-  let changedSince: string | undefined;
-  let format: CliOutputFormat = "human";
-  const sourcePaths: string[] = [];
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
-    const value = args[index + 1];
-    if (VALUE_OPTIONS.has(arg)) {
-      if (value === undefined || value.startsWith("--")) throw new CliArgError(`${arg} requires a value`);
-      if (arg === "--coverage") coverageFile = value;
-      else if (arg === "--config") configPath = value;
-      else if (arg === "--changed-since") changedSince = value;
-      else if (arg === "--format") {
-        if (!FORMATS.includes(value)) {
-          throw new CliArgError(`--format must be one of human, json, markdown, got "${value}"`);
-        }
-        format = value as CliOutputFormat;
-      } else {
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-          throw new CliArgError(`--threshold must be a non-negative number, got "${value}"`);
-        }
-        threshold = parsed;
-      }
-      index++;
-    } else if (arg === "--json") format = "json";
-    else if (arg === MARKDOWN_ALIAS) format = "markdown";
-    else if (arg.startsWith("--")) throw new CliArgError(`unknown option "${arg}"`);
-    else sourcePaths.push(arg);
-  }
-  if (coverageFile === undefined) throw new CliArgError("--coverage is required");
+  const state = scanArgs(argv.slice(2));
+  if (state.coverageFile === undefined) throw new CliArgError("--coverage is required");
   return {
-    sourcePaths,
-    coverageFile,
-    ...(threshold === undefined ? {} : { threshold }),
-    ...(configPath === undefined ? {} : { configPath }),
-    ...(changedSince === undefined ? {} : { changedSince }),
-    format,
+    sourcePaths: state.sourcePaths,
+    coverageFile: state.coverageFile,
+    ...(state.threshold === undefined ? {} : { threshold: state.threshold }),
+    ...(state.configPath === undefined ? {} : { configPath: state.configPath }),
+    ...(state.changedSince === undefined ? {} : { changedSince: state.changedSince }),
+    format: state.format,
   };
 }
 
