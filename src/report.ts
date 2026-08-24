@@ -142,45 +142,88 @@ export function renderHumanReport(report: CrapReport): string {
   }
   lines.push("");
 
+  const prefix = lines.join("\n");
   if (report.rows.length === 0) {
-    lines.push(report.filter === undefined ? "No functions found." : "No eligible changed functions found.");
-    lines.push("");
-    lines.push(`Threshold: ${report.summary.threshold}`);
-    lines.push(`Breached: ${report.summary.breached ? "YES" : "no"}`);
-    return lines.join("\n");
+    return `${prefix}\n${renderHumanEmptyBody(report)}\n\n${renderHumanSummary(report)}`;
   }
 
-  // Column widths
-  const nameW = Math.max(8, ...report.rows.map((r) => r.displayName.length));
-  const fileW = Math.max(4, ...report.rows.map((r) => shortenPath(r.filePath).length));
+  return `${prefix}\n${renderHumanTable(report)}\n\n${renderHumanSummary(report)}`;
+}
 
-  // Header
-  const header =
+/**
+ * The body of an empty human report: the row set is absent, so only the
+ * no-functions message is rendered before the summary.
+ */
+function renderHumanEmptyBody(report: CrapReport): string {
+  return report.filter === undefined
+    ? "No functions found."
+    : "No eligible changed functions found.";
+}
+
+/**
+ * The column header row of the human table.
+ */
+function renderHumanHeader(nameW: number, fileW: number): string {
+  return (
     `${"Function".padEnd(nameW)}  ` +
     `${"File".padEnd(fileW)}  ` +
     `${"Line".padStart(5)}  ` +
     `${"CC".padStart(4)}  ` +
     `${"Cov".padStart(7)}  ` +
     `${"Threshold".padStart(9)}  ` +
-    `${"CRAP".padStart(8)}`;
+    `${"CRAP".padStart(8)}`
+  );
+}
+
+/**
+ * One data row of the human table. Breached rows (crap strictly greater
+ * than the row's applicable threshold) carry the leading `!` marker.
+ */
+function renderHumanRow(row: ReportRow, nameW: number, fileW: number): string {
+  const marker = row.crap > row.threshold ? "!" : " ";
+  return (
+    `${(marker + row.displayName).padEnd(nameW)}  ` +
+    `${shortenPath(row.filePath).padEnd(fileW)}  ` +
+    `${String(row.startLine).padStart(5)}  ` +
+    `${String(row.complexity).padStart(4)}  ` +
+    `${formatPct(row.coverage).padStart(7)}  ` +
+    `${row.threshold.toFixed(1).padStart(9)}  ` +
+    `${row.crap.toFixed(1).padStart(8)}`
+  );
+}
+
+/**
+ * The full data table of the human report: column header, dashed
+ * underline, and one padded row per function in report order.
+ */
+function renderHumanTable(report: CrapReport): string {
+  // Column widths
+  const nameW = Math.max(8, ...report.rows.map((r) => r.displayName.length));
+  const fileW = Math.max(4, ...report.rows.map((r) => shortenPath(r.filePath).length));
+
+  const header = renderHumanHeader(nameW, fileW);
+  const lines: string[] = [];
   lines.push(header);
   lines.push("-".repeat(header.length));
-
   for (const row of report.rows) {
-    const breach = row.crap > row.threshold;
-    const marker = breach ? "!" : " ";
-    const line =
-      `${(marker + row.displayName).padEnd(nameW)}  ` +
-      `${shortenPath(row.filePath).padEnd(fileW)}  ` +
-      `${String(row.startLine).padStart(5)}  ` +
-      `${String(row.complexity).padStart(4)}  ` +
-      `${formatPct(row.coverage).padStart(7)}  ` +
-      `${row.threshold.toFixed(1).padStart(9)}  ` +
-      `${row.crap.toFixed(1).padStart(8)}`;
-    lines.push(line);
+    lines.push(renderHumanRow(row, nameW, fileW));
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The trailing summary block of the human report. Empty reports show only
+ * the threshold and breached state; non-empty reports add the function
+ * count, max CRAP, and gate, plus the exceeded note when the gate fails.
+ */
+function renderHumanSummary(report: CrapReport): string {
+  const lines: string[] = [];
+  if (report.rows.length === 0) {
+    lines.push(`Threshold: ${report.summary.threshold}`);
+    lines.push(`Breached: ${report.summary.breached ? "YES" : "no"}`);
+    return lines.join("\n");
   }
 
-  lines.push("");
   lines.push(`Threshold:     ${report.summary.threshold}`);
   lines.push(`Functions:     ${report.summary.totalFunctions}`);
   lines.push(`Max CRAP:      ${report.summary.maxCrap.toFixed(1)}`);
@@ -189,9 +232,7 @@ export function renderHumanReport(report: CrapReport): string {
 
   if (report.summary.breached) {
     lines.push("");
-    lines.push(
-      "CRAP threshold exceeded; see applicable row thresholds above.",
-    );
+    lines.push("CRAP threshold exceeded; see applicable row thresholds above.");
   }
   return lines.join("\n");
 }
