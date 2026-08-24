@@ -1,0 +1,99 @@
+name: "crap4ts CRAP report"
+description: >
+  Renders a PR-friendly Markdown CRAP report from existing Istanbul coverage
+  into $GITHUB_STEP_SUMMARY and exposes breach outputs. Requires coverage to
+  already exist (e.g. produced by an earlier step); it does not install
+  dependencies or generate coverage itself. Exits 2 when the CRAP threshold
+  is breached, 0 on pass.
+
+branding:
+  icon: "bar-chart-2"
+  color: "purple"
+
+inputs:
+  coverage:
+    description: "Path to the Istanbul coverage-final.json"
+    required: false
+    default: "coverage/coverage-final.json"
+  src:
+    description: "Source directory to analyze"
+    required: false
+    default: "src"
+  threshold:
+    description: "CRAP failure threshold"
+    required: false
+    default: "8"
+
+outputs:
+  breached-count:
+    description: "Number of functions whose CRAP exceeds the threshold"
+    value: ${{ steps.report.outputs.breached-count }}
+  max-crap:
+    description: "Maximum CRAP score across analyzed functions"
+    value: ${{ steps.report.outputs.max-crap }}
+  pass:
+    description: '"true" when no threshold was breached, otherwise "false"'
+    value: ${{ steps.report.outputs.pass }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: report
+      shell: bash
+      env:
+        COVERAGE_FILE: ${{ inputs.coverage }}
+        SOURCE_PATH: ${{ inputs.src }}
+        CRAP_THRESHOLD: ${{ inputs.threshold }}
+      run: |
+        set -euo pipefail
+
+        # Run the self-contained bundled CLI committed under action/.
+        # No package resolution, no auto-install, no fetching, no caller deps.
+        CLI="$GITHUB_ACTION_PATH/action/action.cjs"
+        if [[ ! -f "$CLI" ]]; then
+          echo "::error::crap4ts action is missing its bundled CLI ($CLI). It must be committed under action/ at the tag/ref used by this action (regenerate with 'npm run build:action')."
+          exit 1
+        fi
+
+        if [[ ! -f "$COVERAGE_FILE" ]]; then
+          echo "::error::Coverage file not found: $COVERAGE_FILE. Generate coverage before calling this action."
+          exit 1
+        fi
+
+        if [[ ! -w "${GITHUB_STEP_SUMMARY:-/dev/null}" ]]; then
+          echo "::error::GITHUB_STEP_SUMMARY is not set or not writable; this action requires a GitHub Actions runner environment."
+          exit 1
+        fi
+
+        json_file="$(mktemp)"
+        trap 'rm -f "$json_file"' EXIT
+
+        # Exit code 2 means the threshold was breached — expected here.
+        # Any other non-zero status propagates unchanged.
+        set +e
+        node "$CLI" "$SOURCE_PATH" \
+          --coverage "$COVERAGE_FILE" \
+          --threshold "$CRAP_THRESHOLD" \
+          --format json > "$json_file"
+        status=$?
+        set -e
+
+        if [[ "$status" -ne 0 && "$status" -ne 2 ]]; then
+          echo "::error::crap4ts failed with exit code $status"
+          exit "$status"
+        fi
+
+        # Write job outputs from the JSON produced by the single CLI run.
+        breached="$(node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).summary.breachedCount))' "$json_file")"
+        max_crap="$(node -e 'process.stdout.write(Number(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).summary.maxCrap).toFixed(1))' "$json_file")"
+        {
+          echo "breached-count=$breached"
+          echo "max-crap=$max_crap"
+          if [[ "$breached" == "0" ]]; then echo "pass=true"; else echo "pass=false"; fi
+        } >> "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
+
+        # Render the Markdown summary from the same JSON so both formats come
+        # from a single successful run.
+        node "$GITHUB_ACTION_PATH/action/summary.cjs" "$json_file"
+
+        exit "$status"

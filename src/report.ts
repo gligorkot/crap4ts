@@ -208,3 +208,89 @@ function shortenPath(filePath: string): string {
 export function renderJsonReport(report: CrapReport): string {
   return JSON.stringify(report, null, 2);
 }
+
+/**
+ * Render an untrusted value as a literal inline code span that cannot be
+ * broken out of or used to inject HTML:
+ *
+ * - replace control characters (including CR/LF/TAB) with spaces so the
+ *   value can never start a new line or block;
+ * - choose a backtick delimiter strictly longer than the longest embedded
+ *   backtick run, so no sequence inside the value can close the span early.
+ */
+export function literalCode(value: string): string {
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  let longestRun = 0;
+  for (const match of cleaned.match(/`+/g) ?? []) {
+    if (match.length > longestRun) longestRun = match.length;
+  }
+  const fence = "`".repeat(longestRun + 1);
+  // Pad with spaces so boundary backticks cannot fuse with the delimiters.
+  return `${fence} ${cleaned} ${fence}`;
+}
+
+/**
+ * Render dynamic content (function names, file paths) as literal Markdown
+ * text so it cannot form links, HTML, emphasis, or table structure:
+ *
+ * - backslash-escape every ASCII punctuation character, which neutralizes
+ *   pipes (table cells), brackets/parentheses (links), asterisks/underscores
+ *   (emphasis), and code delimiters;
+ * - replace CR/LF with spaces so a name can never start a new line/block
+ *   (e.g. inject an HTML block or heading);
+ * - wrap in backticks after stripping any embedded backtick-like sequences,
+ *   which makes GitHub render the remainder as inline code — no raw HTML.
+ */
+export function escapeCell(value: string): string {
+  // Remove control characters (including CR/LF/TAB) entirely.
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  // Escape all ASCII punctuation so it cannot act as Markdown syntax.
+  const escaped = cleaned.replace(/[!-/:-@[-`{-~]/g, "\\$&");
+  return `\`${escaped}\``;
+}
+
+/**
+ * Render a PR-friendly Markdown report with a proper table.
+ */
+export function renderMarkdownReport(report: CrapReport): string {
+  const lines: string[] = [];
+  lines.push("## CRAP Report");
+  lines.push("");
+  if (report.filter !== undefined) {
+    lines.push(`Changed-only mode: since ${literalCode(report.filter.changedSince)} (merge base ${literalCode(report.filter.mergeBase)}, ${report.filter.changedFileCount} changed file(s))`);
+    lines.push("");
+  }
+
+  if (report.rows.length === 0) {
+    lines.push(report.filter === undefined ? "No functions found." : "No eligible changed functions found.");
+    lines.push("");
+    lines.push(`**Threshold:** ${report.summary.threshold} · **Breached:** ${report.summary.breached ? "YES" : "no"}`);
+    return lines.join("\n");
+  }
+
+  lines.push("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of report.rows) {
+    const breach = row.crap > row.threshold;
+    const name = breach ? `⚠️ ${escapeCell(row.displayName)}` : escapeCell(row.displayName);
+    const coverage = `${(row.coverage * 100).toFixed(1)}%`;
+    lines.push(
+      `| ${name} ` +
+      `| ${escapeCell(shortenPath(row.filePath))} ` +
+      `| ${row.startLine} ` +
+      `| ${row.complexity} ` +
+      `| ${coverage} ` +
+      `| ${row.threshold.toFixed(1)} ` +
+      `| ${row.crap.toFixed(1)} |`,
+    );
+  }
+
+  lines.push("");
+  const gate = report.summary.breached ? "❌ FAIL" : "✅ PASS";
+  lines.push(
+    `**Threshold:** ${report.summary.threshold} · **Functions:** ${report.summary.totalFunctions}` +
+    ` · **Max CRAP:** ${report.summary.maxCrap.toFixed(1)}` +
+    ` · **Breached:** ${report.summary.breachedCount} function(s) · **Gate:** ${gate}`,
+  );
+  return lines.join("\n");
+}

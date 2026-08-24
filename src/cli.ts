@@ -7,7 +7,10 @@ import { isConfigExcluded, loadConfig, thresholdForPath } from "./config.js";
 import { analyzeFiles, discoverSourceFiles } from "./complexity.js";
 import { assertNoDirtyTypeScriptFiles, changedFunctionFilter, collectChangedFiles } from "./changed.js";
 import { readCoverage, mapAllCoverage } from "./coverage.js";
-import { buildReport, renderHumanReport, renderJsonReport } from "./report.js";
+import { buildReport, renderHumanReport, renderJsonReport, renderMarkdownReport } from "./report.js";
+import type { CrapReport } from "./report.js";
+
+type OutputFormat = "human" | "json" | "markdown";
 
 interface CliArgs {
   readonly sourcePaths: string[];
@@ -15,8 +18,11 @@ interface CliArgs {
   readonly threshold?: number;
   readonly configPath?: string;
   readonly changedSince?: string;
-  readonly json: boolean;
+  readonly format: OutputFormat;
 }
+
+/** @deprecated Legacy alias for --format markdown. */
+const MARKDOWN_ALIAS = "--markdown";
 
 function printUsage(stream: NodeJS.WriteStream): void {
   stream.write([
@@ -27,7 +33,9 @@ function printUsage(stream: NodeJS.WriteStream): void {
     "  --config <path>       Load exactly this TS, ESM (.mjs), CommonJS (.cjs), JS, or JSON config file",
     "  --threshold <number>  Override configured CRAP failure threshold",
     "  --changed-since <ref> Analyze only functions changed since ref's merge base with HEAD",
-    "  --json                Output JSON report instead of human-readable",
+    "  --format <format>     Output format: human (default), json, or markdown",
+    `  --markdown            Deprecated alias for --format markdown`,
+    "  --json                Output JSON report (equivalent to --format json)",
     "  --help                Show this help",
     "",
     "Exit codes:",
@@ -54,24 +62,30 @@ function parseArgs(argv: string[]): CliArgs {
   let threshold: number | undefined;
   let configPath: string | undefined;
   let changedSince: string | undefined;
-  let json = false;
+  let format: OutputFormat = "human";
   const sourcePaths: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === undefined) continue;
     const value = args[index + 1];
-    if (arg === "--coverage" || arg === "--config" || arg === "--threshold" || arg === "--changed-since") {
+    if (arg === "--coverage" || arg === "--config" || arg === "--threshold" || arg === "--changed-since" || arg === "--format") {
       if (value === undefined || value.startsWith("--")) invalid(`${arg} requires a value`);
       if (arg === "--coverage") coverageFile = value;
       else if (arg === "--config") configPath = value;
       else if (arg === "--changed-since") changedSince = value;
-      else {
+      else if (arg === "--format") {
+        if (value !== "human" && value !== "json" && value !== "markdown") {
+          invalid(`--format must be one of human, json, markdown, got "${value}"`);
+        }
+        format = value;
+      } else {
         const parsed = Number(value);
         if (!Number.isFinite(parsed) || parsed < 0) invalid(`--threshold must be a non-negative number, got "${value}"`);
         threshold = parsed;
       }
       index++;
-    } else if (arg === "--json") json = true;
+    } else if (arg === "--json") format = "json";
+    else if (arg === MARKDOWN_ALIAS) format = "markdown";
     else if (arg.startsWith("--")) invalid(`unknown option "${arg}"`);
     else sourcePaths.push(arg);
   }
@@ -82,7 +96,7 @@ function parseArgs(argv: string[]): CliArgs {
     ...(threshold === undefined ? {} : { threshold }),
     ...(configPath === undefined ? {} : { configPath }),
     ...(changedSince === undefined ? {} : { changedSince }),
-    json,
+    format,
   };
 }
 
@@ -92,12 +106,20 @@ function configSourcePaths(src: string | readonly string[] | undefined, projectR
   return paths.map((entry) => path.resolve(projectRoot, entry));
 }
 
-function writeEmptyResult(json: boolean, message: string, threshold: number): void {
-  if (json) {
+function renderReport(format: OutputFormat, report: CrapReport): string {
+  if (format === "json") return renderJsonReport(report);
+  if (format === "markdown") return renderMarkdownReport(report);
+  return renderHumanReport(report);
+}
+
+function writeEmptyResult(format: OutputFormat, message: string, threshold: number): void {
+  if (format === "json") {
     process.stdout.write(JSON.stringify({
       rows: [],
       summary: { totalFunctions: 0, breachedCount: 0, maxCrap: 0, threshold, breached: false },
     }, null, 2) + "\n");
+  } else if (format === "markdown") {
+    process.stdout.write(`_${message}_\n`);
   } else process.stdout.write(`${message}\n`);
 }
 
@@ -136,7 +158,7 @@ async function main(): Promise<void> {
   const files = discoverSourceFiles(sourcePaths, (filePath) => isConfigExcluded(filePath, projectRoot, loaded?.config));
   const changedFiles = changed === undefined ? files : files.filter((filePath) => changed.files.has(filePath));
   if (files.length === 0) {
-    writeEmptyResult(args.json, `No TypeScript source files found under: ${sourcePaths.join(", ")}`, defaultThreshold);
+    writeEmptyResult(args.format, `No TypeScript source files found under: ${sourcePaths.join(", ")}`, defaultThreshold);
     process.exit(0);
   }
   let coverage;
@@ -159,7 +181,7 @@ async function main(): Promise<void> {
     : allFunctionCoverage.filter(({ functionInfo }) => eligibleFunctionSet.has(functionInfo));
   if (functionCoverage.length === 0) {
     const report = buildReport([], defaultThreshold, undefined, filter);
-    process.stdout.write((args.json ? renderJsonReport(report) : renderHumanReport(report)) + "\n");
+    process.stdout.write(renderReport(args.format, report) + "\n");
     process.exit(0);
   }
   const report = buildReport(
@@ -168,7 +190,7 @@ async function main(): Promise<void> {
     (filePath) => thresholdForPath(filePath, projectRoot, loaded?.config, args.threshold),
     filter,
   );
-  process.stdout.write((args.json ? renderJsonReport(report) : renderHumanReport(report)) + "\n");
+  process.stdout.write(renderReport(args.format, report) + "\n");
   if (report.summary.breached) {
     const breach = report.rows.find((row) => row.crap > row.threshold);
     if (breach !== undefined) process.stderr.write(`CRAP threshold exceeded: ${breach.crap.toFixed(1)} > ${breach.threshold}\n`);

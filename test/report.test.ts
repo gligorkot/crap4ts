@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildReport, buildReportRows, sortRows, renderHumanReport, renderJsonReport } from "../src/report.js";
+import { buildReport, buildReportRows, sortRows, renderHumanReport, renderJsonReport, renderMarkdownReport } from "../src/report.js";
 import type { FunctionCoverage } from "../src/coverage.js";
 import type { FunctionInfo } from "../src/complexity.js";
 
@@ -127,5 +127,46 @@ describe("renderJsonReport", () => {
     expect(parsed.rows[0].name).toBe("fn");
     expect(parsed.summary.totalFunctions).toBe(1);
     expect(parsed.summary.threshold).toBe(8);
+  });
+});
+
+describe("renderMarkdownReport", () => {
+  it("renders a Markdown table with header separator and summary", () => {
+    const report = buildReport(
+      [makeFn("ok", 1, 1, 1, 1), makeFn("bad", 4, 1, 1, 0)],
+      8,
+    );
+    const text = renderMarkdownReport(report);
+    expect(text).toContain("## CRAP Report");
+    expect(text).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+    expect(text).toContain("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+    expect(text).toContain("bad");
+    expect(text).toContain("ok");
+    expect(text).toContain("**Gate:** ❌ FAIL");
+  });
+
+  it("marks breached rows with a warning emoji", () => {
+    const report = buildReport([makeFn("bad", 4, 1, 1, 0)], 8);
+    const text = renderMarkdownReport(report);
+    expect(text).toContain("⚠️ `bad`");
+  });
+
+  it("renders a pass gate when nothing breaches", () => {
+    const report = buildReport([makeFn("ok", 1, 1, 1, 1)], 8);
+    const text = renderMarkdownReport(report);
+    expect(text).toContain("**Gate:** ✅ PASS");
+  });
+
+  it("escapes pipe characters in cell values", () => {
+    const report = buildReport([makeFn("weird|name", 2, 1, 1, 0.5)], 8);
+    const text = renderMarkdownReport(report);
+    expect(text).toContain("weird\\|name");
+  });
+
+  it("handles empty reports gracefully", () => {
+    const report = buildReport([], 8);
+    const text = renderMarkdownReport(report);
+    expect(text).toContain("No functions found.");
+    expect(text).toContain("**Breached:** no");
   });
 });
