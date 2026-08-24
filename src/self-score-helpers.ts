@@ -55,9 +55,7 @@ export function formatSelfScoreAudit(
   expectedNames: readonly string[] = EXPECTED_BREACH_NAMES,
 ): string {
   const rows = expectedNames.map((name) => {
-    const row = report.rows.find(
-      (candidate) => candidate.name === name || candidate.displayName === name,
-    );
+    const row = findRowByName(report, name);
     if (row === undefined) {
       throw new Error(`Expected breach function "${name}" not found in report rows`);
     }
@@ -70,6 +68,101 @@ export function formatSelfScoreAudit(
     "Expected breached rows:",
     ...rows,
   ].join("\n");
+}
+
+/**
+ * The row set of a report whose CRAP score strictly exceeds the row's
+ * applicable threshold.
+ */
+function breachingRows(report: SelfScoreReport): SelfScoreRow[] {
+  return report.rows.filter((row) => row.crap > row.threshold);
+}
+
+/**
+ * Find the row for a given function by its `name` or `displayName`.
+ * Returns undefined when no row matches either field.
+ */
+function findRowByName(
+  report: SelfScoreReport,
+  name: string,
+): SelfScoreRow | undefined {
+  return report.rows.find(
+    (r) => r.name === name || r.displayName === name,
+  );
+}
+
+/**
+ * Whether a row is one of the expected breach functions, matched by its
+ * `name` or its `displayName`.
+ */
+function isExpectedBreachRow(
+  row: SelfScoreRow,
+  expectedNames: readonly string[],
+): boolean {
+  return (
+    expectedNames.includes(row.name) ||
+    expectedNames.includes(row.displayName)
+  );
+}
+
+/**
+ * Check one expected breach row against its applicable row threshold and
+ * coverage. Returns an error message string when the row is present but
+ * not a valid expected breach (not breaching, or covered), or null when it
+ * is a valid expected breach.
+ */
+function checkExpectedBreachRow(
+  row: SelfScoreRow,
+  name: string,
+): string | null {
+  if (row.crap <= row.threshold) {
+    return `Expected "${name}" to breach threshold ${row.threshold} (applicable row threshold) but crap=${row.crap}`;
+  }
+  // Must be unmatched or uncovered (coverage 0).
+  if (row.coverage > 0) {
+    return `Expected "${name}" to be uncovered (coverage 0) but coverage=${row.coverage}`;
+  }
+  return null;
+}
+
+/**
+ * Validate that every expected breach function is present in the report
+ * and that each is an unmatched/uncovered row breaching its applicable row
+ * threshold. Returns the first error message found, or null when every
+ * expected function is a valid breach.
+ */
+function validateExpectedBreachRows(
+  report: SelfScoreReport,
+  expectedNames: readonly string[],
+): string | null {
+  for (const name of expectedNames) {
+    const row = findRowByName(report, name);
+    if (row === undefined) {
+      return `Expected breach function "${name}" not found in report rows`;
+    }
+    const rowError = checkExpectedBreachRow(row, name);
+    if (rowError !== null) {
+      return rowError;
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate that every breaching row in the report is one of the expected
+ * breach functions. Returns the first unexpected breach as an error
+ * message, or null when no unexpected breaches exist.
+ */
+function validateNoUnexpectedBreaches(
+  report: SelfScoreReport,
+  expectedNames: readonly string[],
+): string | null {
+  for (const breach of breachingRows(report)) {
+    if (!isExpectedBreachRow(breach, expectedNames)) {
+      return `Unexpected threshold breach: "${breach.displayName}" (crap=${breach.crap}) is not in expected breach list [${expectedNames.join(", ")}]`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -90,34 +183,10 @@ export function validateSelfScoreBreach(
     return `Report summary threshold ${report.summary.threshold} does not match self-score threshold ${threshold}`;
   }
 
-  const breaches = report.rows.filter((row) => row.crap > row.threshold);
-
-  // Every expected function must be present and breaching its applicable threshold.
-  for (const name of expectedNames) {
-    const row = report.rows.find(
-      (r) => r.name === name || r.displayName === name,
-    );
-    if (row === undefined) {
-      return `Expected breach function "${name}" not found in report rows`;
-    }
-    if (row.crap <= row.threshold) {
-      return `Expected "${name}" to breach threshold ${row.threshold} (applicable row threshold) but crap=${row.crap}`;
-    }
-    // Must be unmatched or uncovered (coverage 0).
-    if (row.coverage > 0) {
-      return `Expected "${name}" to be uncovered (coverage 0) but coverage=${row.coverage}`;
-    }
+  const expectedError = validateExpectedBreachRows(report, expectedNames);
+  if (expectedError !== null) {
+    return expectedError;
   }
 
-  // Every breaching row must be one of the expected functions.
-  for (const breach of breaches) {
-    const isExpected =
-      expectedNames.includes(breach.name) ||
-      expectedNames.includes(breach.displayName);
-    if (!isExpected) {
-      return `Unexpected threshold breach: "${breach.displayName}" (crap=${breach.crap}) is not in expected breach list [${expectedNames.join(", ")}]`;
-    }
-  }
-
-  return null;
+  return validateNoUnexpectedBreaches(report, expectedNames);
 }
