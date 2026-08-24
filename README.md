@@ -26,7 +26,7 @@ than the threshold (default: **8**).
 ## Install
 
 ```sh
-npm install --save-dev crap4ts
+npm install --save-dev @gligor/crap4ts
 ```
 
 ## Usage
@@ -69,11 +69,14 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 
 ## GitHub Action
 
-After your workflow has installed this package and generated Istanbul coverage, append
-its Markdown report to the job summary with the composite action:
+**Prerequisite:** install this package as a dev dependency in the repository
+that uses the Action, and generate coverage, before invoking it. The Action
+runs only `node_modules/.bin/crap4ts` from your workspace — it never resolves
+global/PATH binaries, never runs `npx`, installs packages, or fetches
+anything.
 
 ```yaml
-- run: npm ci
+- run: npm ci        # installs @gligor/crap4ts from devDependencies
 - run: npm run coverage
 - uses: gligorkot/crap4ts@v1
   with:
@@ -82,16 +85,53 @@ its Markdown report to the job summary with the composite action:
     threshold: 8
 ```
 
-The action does not install packages, generate coverage, upload artifacts, or comment
-on pull requests. It runs a self-contained bundled CLI committed in this repository
-under `action/` (`$GITHUB_ACTION_PATH/action/action.cjs`, regenerated deterministically
-with `npm run build:action`), so no caller-side dependency, PATH lookup, npm/npx, or
-runtime fetch is needed. It writes the Markdown report to
+If the CLI is not installed (no `node_modules/.bin/crap4ts`), the action fails
+immediately with a clear error instead of falling back to any other binary.
+
+The action does not generate coverage, upload artifacts, or comment
+on pull requests. It executes the locally installed CLI, writes the Markdown report to
 `$GITHUB_STEP_SUMMARY` and exposes `breached-count`, `max-crap`, and `pass`
 (`"true"`/`"false"`) outputs. Exit codes: `0` on pass, `2` when the threshold is
 breached (outputs and summary are written first either way); any other non-zero exit
 propagates unchanged. Dynamic function names and file paths are rendered as escaped
 literal code spans so they cannot inject Markdown or HTML into the summary.
+
+## Publishing
+
+Releases are published to npm as `@gligor/crap4ts` by
+`.github/workflows/publish.yml`, triggered on push to `main` and via
+`workflow_dispatch`. The workflow runs typecheck, tests, and build first,
+then publishes **only when the `package.json` version is not already on the
+npm registry** — it never bumps versions automatically.
+
+Authentication uses npm **OIDC trusted publishing** (`id-token: write`); no
+long-lived `NPM_TOKEN` secret is stored in the repository.
+
+One-time setup required before the first automated publish works:
+
+1. Trusted publishing cannot perform the very first publish of a brand-new
+   package name. From a checkout with publish rights to the `@gligor` scope,
+   run `npm ci && npm publish --access public`. The package `prepack` hook runs
+   the build before packaging, so the initial release cannot omit `dist/`.
+2. Then, on npmjs.com, configure the package `@gligor/crap4ts` as a
+   **trusted publisher** with Organization/user `gligor`, Repository
+   `crap4ts`, Workflow filename `publish.yml` (filename only), and Allowed
+   actions `npm publish`. Leave npm's optional "Environment" field blank: this
+   workflow declares **no** GitHub Actions environment, so a non-blank
+   environment would make OIDC claims mismatch and every publish fail. After
+   that, the workflow's trusted-publisher OIDC flow handles all subsequent
+   version publishes.
+
+### GitHub Marketplace
+
+This repository can be listed as a GitHub Marketplace Action because `action.yml`
+is at the repository root. Its intended reference is `uses: gligorkot/crap4ts@v1`.
+Marketplace publication is a one-time GitHub web release flow with browser/2FA
+confirmation; GitHub does not support automating it from a workflow. Publish the
+scoped npm package first, then create the public `v1` release and select the
+Marketplace option. The Marketplace Action still deliberately requires
+`@gligor/crap4ts` in the consumer project's dev dependencies; it never
+installs or downloads packages at runtime.
 
 ## Configuration
 
@@ -112,7 +152,7 @@ must be finite non-negative numbers.
 
 ```ts
 // crap4ts.config.ts
-import { defineConfig } from "crap4ts";
+import { defineConfig } from "@gligor/crap4ts";
 
 export default defineConfig({
   version: 1,
@@ -129,7 +169,7 @@ export default defineConfig({
 
 ```js
 // crap4ts.config.mjs — ESM in every project module system
-import { defineConfig } from "crap4ts";
+import { defineConfig } from "@gligor/crap4ts";
 
 export default defineConfig({
   version: 1,
@@ -399,7 +439,7 @@ occurs and is fully explained; it exits non-zero otherwise.
 - Branch-level coverage granularity (v1 uses Istanbul statement-level coverage)
 - Architecture/dependency enforcement
 - Agent orchestration or automated refactoring
-- Release publishing automation
+- Automatic release version bumping (publishing exists, but versions are always bumped manually)
 
 ## Development
 

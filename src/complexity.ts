@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { canonicalPath } from "./path-identity.js";
 import ts from "typescript";
 
 /**
@@ -332,13 +333,13 @@ export function discoverSourceFiles(
   const results: string[] = [];
   const seen = new Set<string>();
   for (const root of roots) {
-    const absRoot = path.resolve(root);
+    const absRoot = canonicalPath(root);
     if (!fs.existsSync(absRoot)) {
       continue;
     }
     const stat = fs.statSync(absRoot);
     if (stat.isFile()) {
-      const norm = path.resolve(absRoot);
+      const norm = canonicalPath(absRoot);
       if (!seen.has(norm) && isSourceFile(norm) && !shouldExclude(norm) && !shouldExcludeAdditional?.(norm)) {
         seen.add(norm);
         results.push(norm);
@@ -365,7 +366,7 @@ function walkDir(
       }
       walkDir(full, results, seen, shouldExcludeAdditional);
     } else if (entry.isFile() && isSourceFile(full) && !shouldExclude(full) && !shouldExcludeAdditional?.(full)) {
-      const norm = path.resolve(full);
+      const norm = canonicalPath(full);
       if (!seen.has(norm)) {
         seen.add(norm);
         results.push(norm);
@@ -388,7 +389,7 @@ function isSourceFile(filePath: string): boolean {
 export function analyzeFiles(filePaths: string[]): FunctionInfo[] {
   const all: FunctionInfo[] = [];
   for (const file of filePaths) {
-    const abs = path.resolve(file);
+    const abs = canonicalPath(file);
     try {
       const source = fs.readFileSync(abs, "utf8");
       const funcs = analyzeSource(abs, source);

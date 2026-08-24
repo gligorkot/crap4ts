@@ -81,24 +81,26 @@ describe("configuration", () => {
   it("loads the README TypeScript defineConfig import from a packed installed package", () => {
     const project = tempProject();
     const packageRoot = path.resolve(__dirname, "..");
-    const packed = execFileSync("npm", ["pack", "--pack-destination", project], {
+    const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", project], {
       cwd: packageRoot, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", path.join(project, packed)], {
+    })) as Array<{ filename: string }>;
+    const tarball = packed[0]?.filename;
+    expect(tarball).toBeTypeOf("string");
+    execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", path.join(project, tarball!)], {
       cwd: project, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     });
     fs.writeFileSync(path.join(project, "crap4ts.config.ts"), [
-      'import { defineConfig } from "crap4ts";',
+      'import { defineConfig } from "@gligor/crap4ts";',
       "",
       "export default defineConfig({ version: 1, src: 'src', threshold: 100 });",
       "",
     ].join("\n"));
 
-    const installedCli = path.join(project, "node_modules", "crap4ts", "dist", "cli.js");
+    const installedCli = path.join(project, "node_modules", "@gligor", "crap4ts", "dist", "cli.js");
     const result = runCli(project, ["--coverage", "coverage.json", "--json"], true, installedCli);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
-  });
+  }, 15_000);
 
   it("uses an ESM .mjs config through the built CLI in a CommonJS project", () => {
     const project = tempProject();

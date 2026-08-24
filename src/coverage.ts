@@ -59,6 +59,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { FunctionInfo } from "./complexity.js";
+import { canonicalPath } from "./path-identity.js";
 
 /**
  * Coverage for a single function after mapping.
@@ -136,12 +137,13 @@ export function readCoverage(filePath: string): IstanbulCoverage {
 }
 
 /**
- * Normalize a file path for matching: resolve to absolute and collapse
- * `..`/`.` segments. Forward-slash normalization for cross-platform matching.
- * Does NOT touch the filesystem.
+ * Normalize a file path for matching: canonicalize an existing absolute path
+ * (resolving filesystem aliases such as macOS `/var` → `/private/var`) and
+ * forward-slash-normalize it. Missing paths remain resolved but non-canonical
+ * so coverage reports from another machine can still use suffix matching.
  */
 function normalizeFilePath(p: string): string {
-  return path.resolve(p).split(path.sep).join("/");
+  return canonicalPath(p).split(path.sep).join("/");
 }
 
 /**

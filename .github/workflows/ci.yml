@@ -29,16 +29,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Bundle GitHub Action CLI
-        # Regenerates action/action.cjs and action/summary.cjs deterministically;
-        # CI fails if the committed bundle is stale.
-        run: |
-          npm run build:action
-          git diff --exit-code --stat -- action/ || {
-            echo "::error::action/ bundle is out of date. Run 'npm run build:action' and commit the result."
-            exit 1
-          }
-
       - name: CRAP report (threshold 8; report-only)
         shell: bash
         run: |

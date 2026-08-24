@@ -171,7 +171,7 @@ describe("changed-only CLI", () => {
     const nested = path.join(project, "nested");
     fs.mkdirSync(nested);
     const changed = collectChangedFiles("main", nested);
-    const sourcePath = path.join(project, "src", "has space.ts");
+    const sourcePath = fs.realpathSync.native(path.join(project, "src", "has space.ts"));
     expect([...changed.files.keys()]).toEqual([sourcePath]);
     expect(discoverSourceFiles([path.resolve(nested, "../src")]).filter((filePath) => changed.files.has(filePath))).toEqual([sourcePath]);
 
