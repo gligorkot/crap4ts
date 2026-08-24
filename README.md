@@ -109,25 +109,29 @@ long-lived `NPM_TOKEN` secret is stored in the repository.
 
 One-time setup required before the first automated publish works:
 
-1. On npmjs.com, configure the package `@gligorkot/crap4ts` as a **trusted
-   publisher** for this repository and workflow file
-   (`.github/workflows/publish.yml`), bound to the GitHub repository
-   `gligorkot/crap4ts` and the environment used by the workflow.
-2. Trusted publishing cannot perform the very first publish of a brand-new
+1. Trusted publishing cannot perform the very first publish of a brand-new
    package name. Do the initial publish manually once
    (`npm publish --access public` from a checkout with publish rights to the
-   `@gligorkot` scope). After that first version exists, the workflow's
-   trusted-publisher OIDC flow handles all subsequent version publishes.
+   `@gligorkot` scope).
+2. Then, on npmjs.com, configure the package `@gligorkot/crap4ts` as a
+   **trusted publisher**: bind it to the GitHub repository
+   `gligorkot/crap4ts`, the workflow filename `.github/workflows/publish.yml`,
+   and no environment. The workflow currently declares **no** GitHub Actions
+   environment, so leave npm's optional "Environment" field blank — a non-blank
+   environment would make OIDC claims mismatch and every publish fail. After
+   that, the workflow's trusted-publisher OIDC flow handles all subsequent
+   version publishes.
 
 ### GitHub Marketplace
 
-This repository can also be listed as a GitHub Marketplace Action: `action.yml`
-is at the repository root and the Action is designed for `uses: gligorkot/crap4ts@v1`. Marketplace publication itself is a one-time GitHub web
-release flow with a browser/2FA confirmation; it cannot be automated by a
-workflow. Publish the scoped npm package first, then create the public `v1`
-release in GitHub and select the Marketplace option. The Marketplace Action
-still deliberately requires `@gligorkot/crap4ts` in the consumer project's dev
-dependencies — it never downloads packages at runtime.
+This repository can be listed as a GitHub Marketplace Action because `action.yml`
+is at the repository root. Its intended reference is `uses: gligorkot/crap4ts@v1`.
+Marketplace publication is a one-time GitHub web release flow with browser/2FA
+confirmation; GitHub does not support automating it from a workflow. Publish the
+scoped npm package first, then create the public `v1` release and select the
+Marketplace option. The Marketplace Action still deliberately requires
+`@gligorkot/crap4ts` in the consumer project's dev dependencies; it never
+installs or downloads packages at runtime.
 
 ## Configuration
 
@@ -148,7 +152,7 @@ must be finite non-negative numbers.
 
 ```ts
 // crap4ts.config.ts
-import { defineConfig } from "crap4ts";
+import { defineConfig } from "@gligorkot/crap4ts";
 
 export default defineConfig({
   version: 1,
@@ -165,7 +169,7 @@ export default defineConfig({
 
 ```js
 // crap4ts.config.mjs — ESM in every project module system
-import { defineConfig } from "crap4ts";
+import { defineConfig } from "@gligorkot/crap4ts";
 
 export default defineConfig({
   version: 1,

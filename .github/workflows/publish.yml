@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Serialize publish runs: never cancel an in-flight publish, queue instead.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
@@ -19,6 +24,29 @@ jobs:
         with:
           node-version-file: .nvmrc
           registry-url: "https://registry.npmjs.org/"
+
+      - name: Install npm 11.5.1 with trusted-publishing support
+        run: npm install --global npm@11.5.1
+
+      - name: Verify npm version supports trusted publishing (>= 11.5.1)
+        run: |
+          set -euo pipefail
+          npm_version="$(npm --version)"
+          minimum="11.5.1"
+          echo "npm ${npm_version} (minimum for trusted publishing: ${minimum})"
+          if ! node -e '
+            const [installed, minimum] = process.argv.slice(1).map(
+              (v) => v.split(".").map(Number),
+            );
+            for (let i = 0; i < 3; i++) {
+              if ((installed[i] ?? 0) !== (minimum[i] ?? 0)) {
+                process.exit((installed[i] ?? 0) < (minimum[i] ?? 0) ? 1 : 0);
+              }
+            }
+          ' "$npm_version" "$minimum"; then
+            echo "::error::npm ${npm_version} is too old for OIDC trusted publishing; requires >= ${minimum}."
+            exit 1
+          fi
 
       - run: npm ci
 
