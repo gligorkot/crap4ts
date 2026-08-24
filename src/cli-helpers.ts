@@ -658,10 +658,13 @@ export function runCliPipeline(ctx: CliRunContext, io: CliIo, cwd: string): void
     : files.filter((filePath) => changedFiles.has(filePath));
   const functions = analyzeFiles(changedFileList);
   const eligible = eligibleFunctionsFor(functions, changedFiles);
+  // Build the membership set ONCE before filtering: rebuilding it inside the
+  // filter callback would allocate a fresh Set per coverage entry.
+  const eligibleSet = eligibleSetOf(eligible);
   const functionCoverage = changedFiles === undefined
     ? mapAllCoverage(functions, coverage)
     : mapAllCoverage(functions, coverage).filter((entry) =>
-        eligibleSetOf(eligible).has(entry.functionInfo),
+        eligibleSet.has(entry.functionInfo),
       );
   writeReportAndExit(
     ctx,
