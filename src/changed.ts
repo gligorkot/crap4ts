@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import type { FunctionInfo } from "./complexity.js";
+import { canonicalPath } from "./path-identity.js";
 
 export interface ChangedLineRange {
   readonly start: number;
@@ -121,7 +122,7 @@ export function changedFunctionFilter(
   files: ReadonlyMap<string, ChangedFile>,
 ): FunctionInfo[] {
   return functions.filter((fn) => {
-    const changed = files.get(path.resolve(fn.filePath));
+    const changed = files.get(canonicalPath(fn.filePath));
     if (changed === undefined) return false;
     if (changed.kind === "all") return true;
     return changed.ranges.some((range) => fn.startLine <= range.end && range.start <= fn.endLine);
@@ -183,8 +184,8 @@ function parseRenameScore(rawStatus: string): number {
 }
 
 function toProjectPath(cwd: string, relativePath: string): string | null {
-  const root = path.resolve(cwd);
-  const absolute = path.resolve(root, relativePath);
+  const root = canonicalPath(cwd);
+  const absolute = canonicalPath(path.resolve(root, relativePath));
   const relative = path.relative(root, absolute);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   return absolute;
