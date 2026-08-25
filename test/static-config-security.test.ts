@@ -45,6 +45,35 @@ describe("static declarative config loading (security)", () => {
     expect(loadConfig(project, "d.config.js")?.config.threshold).toBe(4);
   });
 
+  it("evaluates string, template, nested-object, and array literals statically", () => {
+    const project = tempProject();
+    fs.writeFileSync(path.join(project, "scalars.config.mjs"), [
+      "export default {",
+      "  version: 1,",
+      "  src: 'src',",
+      "  exclude: [`gen`],",
+      "  thresholds: [{ glob: 'src/**/*.ts', threshold: 2 }],",
+      "};",
+      "",
+    ].join("\n"));
+    const loaded = loadConfig(project, "scalars.config.mjs")?.config;
+    expect(loaded?.exclude).toEqual(["gen"]);
+    expect(loaded?.thresholds).toEqual([{ glob: "src/**/*.ts", threshold: 2 }]);
+  });
+
+  it("evaluates a negative numeric literal before rejecting it at validation", () => {
+    const project = tempProject();
+    fs.writeFileSync(path.join(project, "neg.config.mjs"), "export default { version: 1, threshold: -3 };\n");
+    // The literal evaluator accepts -3; strict validation rejects the value.
+    expect(() => loadConfig(project, "neg.config.mjs")).toThrow(/must be a finite non-negative number/);
+  });
+
+  it("rejects an export default of undefined as unsupported non-literal syntax", () => {
+    const project = tempProject();
+    fs.writeFileSync(path.join(project, "undef.config.mjs"), "export default undefined;\n");
+    expect(() => loadConfig(project, "undef.config.mjs")).toThrow(/unsupported non-literal syntax/);
+  });
+
   it("rejects malicious TypeScript config content without executing side effects", () => {
     const project = tempProject();
     const malicious = [

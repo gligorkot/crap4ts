@@ -269,40 +269,62 @@ function parseStaticModuleExport(source: string, configPath: string): unknown {
   if (diagnostics.length > 0) {
     throw new Error(formatParseDiagnostics(diagnostics, sf));
   }
+  return evaluateLiteralNode(findStaticExport(sf), sf);
+}
 
+/** Scan top-level statements and return the single declared export expression. */
+function findStaticExport(sf: ts.SourceFile): ts.Expression {
   let exported: ts.Expression | undefined;
   let sawStatement = false;
   for (const statement of sf.statements) {
     if (ts.isImportDeclaration(statement)) continue; // allowed but never resolved/executed
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      exported = requireLiteralExpression(statement.expression, "export default", sf);
-      sawStatement = true;
-      continue;
-    }
-    if (
-      ts.isVariableStatement(statement) &&
-      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
-    ) {
-      // `export const config = { ... }` style exports are not part of the
-      // documented shapes.
-      throw new Error("unsupported export declaration; use export default");
-    }
-    if (
-      ts.isExpressionStatement(statement) &&
-      ts.isBinaryExpression(statement.expression) &&
-      statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      isModuleExportsTarget(statement.expression.left)
-    ) {
-      exported = requireLiteralExpression(statement.expression.right, "module.exports", sf);
-      sawStatement = true;
-      continue;
-    }
-    throw new Error(`unsupported config statement at line ${statement.getStart(sf) === 0 ? 1 : sf.getLineAndCharacterOfPosition(statement.getStart(sf)).line + 1}; configs are declarative and may not contain executable code`);
+    const scanned = staticExportFromStatement(statement, sf);
+    if (scanned === undefined) continue;
+    exported = scanned;
+    sawStatement = true;
   }
   if (!sawStatement || exported === undefined) {
     throw new Error("config must export an object via export default or module.exports");
   }
-  return evaluateLiteralNode(exported, sf);
+  return exported;
+}
+
+/**
+ * Interpret one non-import top-level statement. Returns the exported literal
+ * expression, or undefined for statements that carry no export (currently
+ * none beyond imports, which the caller skips).
+ */
+function staticExportFromStatement(statement: ts.Statement, sf: ts.SourceFile): ts.Expression | undefined {
+  if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
+    return requireLiteralExpression(statement.expression, "export default", sf);
+  }
+  if (isExportedVariableStatement(statement)) {
+    // `export const config = { ... }` style exports are not part of the
+    // documented shapes.
+    throw new Error("unsupported export declaration; use export default");
+  }
+  if (isModuleExportsAssignment(statement)) {
+    return requireLiteralExpression(statement.expression.right, "module.exports", sf);
+  }
+  throw new Error(unsupportedStatementMessage(statement, sf));
+}
+
+function isExportedVariableStatement(statement: ts.Statement): boolean {
+  return ts.isVariableStatement(statement)
+    && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true;
+}
+
+function isModuleExportsAssignment(statement: ts.Statement): statement is ts.ExpressionStatement & { expression: ts.BinaryExpression } {
+  return ts.isExpressionStatement(statement)
+    && ts.isBinaryExpression(statement.expression)
+    && statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    && isModuleExportsTarget(statement.expression.left);
+}
+
+function unsupportedStatementMessage(statement: ts.Statement, sf: ts.SourceFile): string {
+  const start = statement.getStart(sf);
+  const line = start === 0 ? 1 : sf.getLineAndCharacterOfPosition(start).line + 1;
+  return `unsupported config statement at line ${line}; configs are declarative and may not contain executable code`;
 }
 
 /** Restrict an export expression to the exact documented declarative forms. */
@@ -331,16 +353,53 @@ function isModuleExportsTarget(expression: ts.Expression): boolean {
 
 /** Interpret an AST node as a plain literal value; reject everything else. */
 function evaluateLiteralNode(node: ts.Expression, sf: ts.SourceFile): unknown {
-  if (node.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
-  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
-  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-  if (ts.isNumericLiteral(node)) return Number(node.text);
-  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(node.operand)) {
-    return -Number(node.operand.text);
+  const scalar = evaluateScalarLiteral(node);
+  if (scalar.evaluated) return scalar.value;
+  return evaluateCompositeLiteral(node, sf);
+}
+
+/** Result of attempting a direct scalar interpretation of one node. */
+interface ScalarEvaluation {
+  readonly evaluated: boolean;
+  readonly value?: unknown;
+}
+
+const SCALAR_KEYWORDS: ReadonlyMap<ts.SyntaxKind, unknown> = new Map([
+  [ts.SyntaxKind.UndefinedKeyword, undefined],
+  [ts.SyntaxKind.TrueKeyword, true],
+  [ts.SyntaxKind.FalseKeyword, false],
+]);
+
+/**
+ * Interpret a node as a keyword/string/number literal. Returns
+ * `evaluated: false` when the node is not a scalar literal (it may still be
+ * an array or object literal for the caller to handle).
+ */
+function evaluateScalarLiteral(node: ts.Expression): ScalarEvaluation {
+  const keyword = SCALAR_KEYWORDS.get(node.kind);
+  if (SCALAR_KEYWORDS.has(node.kind)) return { evaluated: true, value: keyword };
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return { evaluated: true, value: node.text };
   }
+  if (ts.isNumericLiteral(node)) return { evaluated: true, value: Number(node.text) };
+  const negative = negativeNumericLiteralValue(node);
+  if (negative !== undefined) return { evaluated: true, value: negative };
+  return { evaluated: false };
+}
+
+/** Return `-n` for a `-n` unary expression over a numeric literal, else undefined. */
+function negativeNumericLiteralValue(node: ts.Expression): number | undefined {
+  if (!ts.isPrefixUnaryExpression(node) || node.operator !== ts.SyntaxKind.MinusToken) return undefined;
+  if (!ts.isNumericLiteral(node.operand)) return undefined;
+  return -Number(node.operand.text);
+}
+
+/** Interpret an array or object literal node; reject anything else. */
+function evaluateCompositeLiteral(node: ts.Expression, sf: ts.SourceFile): unknown {
   if (ts.isObjectLiteralExpression(node)) return evaluateLiteralObject(node, sf);
-  if (ts.isArrayLiteralExpression(node)) return node.elements.map((element) => evaluateLiteralElement(element, sf));
+  if (ts.isArrayLiteralExpression(node)) {
+    return node.elements.map((element) => evaluateLiteralElement(element, sf));
+  }
   throw new Error(describeRejectedNode(node, sf));
 }
 
