@@ -98,7 +98,7 @@ describe("configuration", () => {
       packages: Record<string, { dependencies?: Record<string, string>; peer?: boolean; version?: string }>;
     };
     expect(installedManifest.dependencies ?? {}).not.toHaveProperty("typescript");
-    expect(installedManifest.peerDependencies).toEqual({ typescript: ">=6.0.3 <7" });
+    expect(installedManifest.peerDependencies).toEqual({ typescript: ">=5 <7" });
     expect(consumerLock.packages[""]?.dependencies).not.toHaveProperty("typescript");
     expect(consumerLock.packages["node_modules/typescript"]).toMatchObject({ peer: true, version: "6.0.3" });
     fs.writeFileSync(path.join(project, "crap4ts.config.ts"), [
