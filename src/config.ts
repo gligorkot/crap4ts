@@ -1,14 +1,12 @@
 /**
  * Strict, versioned project configuration loading and path rule matching.
  *
- * JavaScript and TypeScript configuration files are executable local project
- * code. Callers must only run crap4ts in repositories they trust.
+ * Configuration files are parsed statically and never executed. TypeScript,
+ * ESM, and CommonJS config files are read as text and interpreted through a
+ * restrictive declarative subset; arbitrary code in them is rejected.
  */
 import * as fs from "node:fs";
-import { createRequire } from "node:module";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
-import * as vm from "node:vm";
 import ts from "typescript";
 import { DEFAULT_THRESHOLD } from "./crap.js";
 
@@ -47,11 +45,11 @@ export function defineConfig(config: Crap4tsConfig): Crap4tsConfig {
 }
 
 /** Locate and load one config, respecting the documented discovery precedence. */
-export async function loadConfig(
+export function loadConfig(
   projectRoot: string,
   explicitPath?: string,
-): Promise<LoadedConfig | undefined> {
-  const root = path.resolve(projectRoot);
+): LoadedConfig | undefined {
+  const root = fs.realpathSync(path.resolve(projectRoot));
   const configPath = explicitPath === undefined
     ? DISCOVERED_CONFIG_NAMES.map((name) => path.join(root, name)).find((candidate) => fs.existsSync(candidate))
     : path.resolve(root, explicitPath);
@@ -65,9 +63,14 @@ export async function loadConfig(
   }
   if (!stat.isFile()) throw new Error(`config path is not a file: ${configPath}`);
 
+  // The selected or discovered config (including through symlinks) must resolve
+  // inside the supplied project root.
   const resolvedConfigPath = fs.realpathSync(configPath);
-  const config = await readConfig(resolvedConfigPath);
-  return { config, configPath: resolvedConfigPath, projectRoot: path.dirname(resolvedConfigPath) };
+  if (!isContainedPath(root, resolvedConfigPath)) {
+    throw new Error(`config path must resolve within the project root: ${configPath}`);
+  }
+  const config = readConfig(resolvedConfigPath);
+  return { config, configPath: resolvedConfigPath, projectRoot: root };
 }
 
 /** Match a file path against a config glob relative to the project root. */
@@ -242,67 +245,150 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 }
 
-async function readConfig(configPath: string): Promise<Crap4tsConfig> {
+function readConfig(configPath: string): Crap4tsConfig {
   try {
     if (configPath.endsWith(".json")) {
       return validateConfig(JSON.parse(fs.readFileSync(configPath, "utf8")), path.dirname(configPath));
     }
-    const module = configPath.endsWith(".ts")
-      ? await importTranspiledTypeScript(configPath)
-      : await import(pathToFileURL(configPath).href);
-    return validateConfig(module.default, path.dirname(configPath));
+    return validateConfig(parseStaticModuleExport(fs.readFileSync(configPath, "utf8"), configPath), path.dirname(configPath));
   } catch (error) {
     throw new Error(`invalid config ${configPath}: ${(error as Error).message}`);
   }
 }
 
-async function importTranspiledTypeScript(configPath: string): Promise<Record<string, unknown>> {
-  const source = fs.readFileSync(configPath, "utf8");
-  const result = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: configPath,
-    reportDiagnostics: true,
-  });
-  const diagnostics = result.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error) ?? [];
+/**
+ * Statically parse a TS/JS/MJS/CJS config file and return the exported config
+ * value. The file is never executed: only a restrictive declarative subset is
+ * accepted — `export default { ... }`, `export default defineConfig({ ... })`,
+ * or `module.exports = { ... }` — with literal values only. Import
+ * declarations are tolerated syntactically but never resolved or run.
+ */
+function parseStaticModuleExport(source: string, configPath: string): unknown {
+  const sf = ts.createSourceFile(configPath, source, ts.ScriptTarget.ES2022, true, scriptKindFor(configPath));
+  const diagnostics = sourceFileParseDiagnostics(sf);
   if (diagnostics.length > 0) {
-    throw new Error(formatTranspileDiagnostics(diagnostics));
+    throw new Error(formatParseDiagnostics(diagnostics, sf));
   }
-  const module = { exports: {} as Record<string, unknown> };
-  const execute = compileTranspiledCommonJs(result.outputText, configPath);
-  execute(module.exports, createRequire(configPath), module, configPath, path.dirname(configPath));
-  return module.exports;
+
+  let exported: ts.Expression | undefined;
+  let sawStatement = false;
+  for (const statement of sf.statements) {
+    if (ts.isImportDeclaration(statement)) continue; // allowed but never resolved/executed
+    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
+      exported = requireLiteralExpression(statement.expression, "export default", sf);
+      sawStatement = true;
+      continue;
+    }
+    if (
+      ts.isVariableStatement(statement) &&
+      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+    ) {
+      // `export const config = { ... }` style exports are not part of the
+      // documented shapes.
+      throw new Error("unsupported export declaration; use export default");
+    }
+    if (
+      ts.isExpressionStatement(statement) &&
+      ts.isBinaryExpression(statement.expression) &&
+      statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      isModuleExportsTarget(statement.expression.left)
+    ) {
+      exported = requireLiteralExpression(statement.expression.right, "module.exports", sf);
+      sawStatement = true;
+      continue;
+    }
+    throw new Error(`unsupported config statement at line ${statement.getStart(sf) === 0 ? 1 : sf.getLineAndCharacterOfPosition(statement.getStart(sf)).line + 1}; configs are declarative and may not contain executable code`);
+  }
+  if (!sawStatement || exported === undefined) {
+    throw new Error("config must export an object via export default or module.exports");
+  }
+  return evaluateLiteralNode(exported, sf);
 }
 
-/** Render TypeScript error diagnostics with file, line, and column context. */
-function formatTranspileDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
-  return ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-    getCanonicalFileName: (fileName) => fileName,
-    getCurrentDirectory: () => process.cwd(),
-    getNewLine: () => "\n",
-  });
+/** Restrict an export expression to the exact documented declarative forms. */
+function requireLiteralExpression(expression: ts.Expression, form: string, sf: ts.SourceFile): ts.Expression {
+  if (ts.isCallExpression(expression) && isDefineConfigIdentifier(expression.expression)) {
+    if (expression.arguments.length !== 1) {
+      throw new Error(`${form} defineConfig(...) must be called with exactly one object argument`);
+    }
+    return expression.arguments[0]!;
+  }
+  return expression;
 }
 
-/** Compile transpiled CommonJS text into the module-executing wrapper function. */
-function compileTranspiledCommonJs(
-  outputText: string,
-  configPath: string,
-): (
-  exports: Record<string, unknown>,
-  require: NodeJS.Require,
-  module: { exports: Record<string, unknown> },
-  filename: string,
-  dirname: string,
-) => void {
-  return vm.runInThisContext(
-    `(function (exports, require, module, __filename, __dirname) { ${outputText}\n})`,
-    { filename: configPath },
-  ) as (
-    exports: Record<string, unknown>,
-    require: NodeJS.Require,
-    module: { exports: Record<string, unknown> },
-    filename: string,
-    dirname: string,
-  ) => void;
+function isDefineConfigIdentifier(expression: ts.Expression): boolean {
+  return ts.isIdentifier(expression) && expression.text === "defineConfig";
+}
+
+function isModuleExportsTarget(expression: ts.Expression): boolean {
+  return ts.isIdentifier(expression) && expression.text === "exports"
+    || ts.isPropertyAccessExpression(expression)
+      && ts.isIdentifier(expression.expression)
+      && expression.expression.text === "module"
+      && ts.isIdentifier(expression.name)
+      && expression.name.text === "exports";
+}
+
+/** Interpret an AST node as a plain literal value; reject everything else. */
+function evaluateLiteralNode(node: ts.Expression, sf: ts.SourceFile): unknown {
+  if (node.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  if (ts.isNumericLiteral(node)) return Number(node.text);
+  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(node.operand)) {
+    return -Number(node.operand.text);
+  }
+  if (ts.isObjectLiteralExpression(node)) return evaluateLiteralObject(node, sf);
+  if (ts.isArrayLiteralExpression(node)) return node.elements.map((element) => evaluateLiteralElement(element, sf));
+  throw new Error(describeRejectedNode(node, sf));
+}
+
+function evaluateLiteralElement(element: ts.Expression, sf: ts.SourceFile): unknown {
+  if (ts.isSpreadElement(element)) {
+    throw new Error("array/object spreads are not supported in declarative configs");
+  }
+  return evaluateLiteralNode(element, sf);
+}
+
+function evaluateLiteralObject(node: ts.ObjectLiteralExpression, sf: ts.SourceFile): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property)) {
+      throw new Error("declarative configs only support plain key/value properties (no spreads, methods, computed keys, getters, or shorthand assignments)");
+    }
+    const name = property.name;
+    if (ts.isComputedPropertyName(name)) {
+      throw new Error("computed property names are not supported in declarative configs");
+    }
+    const key = ts.isIdentifier(name) ? name.text : ts.isStringLiteral(name) || ts.isNumericLiteral(name) ? name.text : describeRejectedNode(name, sf);
+    result[key] = evaluateLiteralNode(property.initializer, sf);
+  }
+  return result;
+}
+
+/** Render a clear error naming the rejected syntax. */
+function describeRejectedNode(node: ts.Node, sf: ts.SourceFile): string {
+  const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  return `unsupported non-literal syntax ("${node.getText(sf).slice(0, 60)}") at line ${line}; configs are static data and may not reference variables, call functions, or compute values`;
+}
+
+/** Choose the TypeScript script kind so TS, ESM, and CommonJS all parse correctly. */
+function scriptKindFor(configPath: string): ts.ScriptKind {
+  return configPath.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+}
+
+/** Access the internal parse-diagnostics list on a parsed source file. */
+function sourceFileParseDiagnostics(sf: ts.SourceFile): readonly ts.Diagnostic[] {
+  const internal = sf as ts.SourceFile & { parseDiagnostics?: ts.Diagnostic[] };
+  return internal.parseDiagnostics ?? [];
+}
+
+function formatParseDiagnostics(diagnostics: readonly ts.Diagnostic[], sf: ts.SourceFile): string {
+  return diagnostics.map((diagnostic) => {
+    const line = diagnostic.start === undefined ? "?" : String(sf.getLineAndCharacterOfPosition(diagnostic.start).line + 1);
+    return `line ${line}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")}`;
+  }).join("; ");
 }
 
 interface PatternSpecificity {

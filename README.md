@@ -210,14 +210,28 @@ applies; if it is absent the default is 8.
 Each JSON report row and each human table row includes its applicable threshold,
 and the gate evaluates that row's CRAP score against that threshold.
 
-TypeScript and JavaScript configs execute local project code. Only run crap4ts
-against repositories whose configuration you trust. TypeScript config loading
-uses the package's TypeScript dependency at runtime and executes the transpiled
-module in memory with resolution rooted at the config file; the built `dist/cli.js`
-never writes generated files into the project. Use `.mjs` for portable ESM and
-`.cjs` for portable CommonJS. A `.js` config follows Node's normal module-system
-rules from the nearest `package.json` (`type: "module"` for ESM; otherwise
-CommonJS), so it is not a universal ESM form.
+Configuration files are declarative and are never executed. crap4ts parses
+them statically and accepts only literal config data: arbitrary code,
+expressions, references, spreads, computed keys, and calls (other than the
+exact `defineConfig({ ... })` wrapper) are rejected as invalid config. Import
+declarations in TS/ESM configs are tolerated syntactically but the imported
+packages are never resolved or loaded at runtime.
+
+The selected or discovered config file — including through symlinks — must
+resolve inside the project root; a `--config` path or symlink that escapes it
+is an input error.
+
+TypeScript and JavaScript configs accept exactly these shapes:
+
+- `export default { ... }` (TS, `.mjs`, `.js`)
+- `export default defineConfig({ ... })` with an optional import declaration
+  for `defineConfig` (the import is never resolved)
+- `module.exports = { ... }` (`.cjs`, CommonJS-style `.js`)
+
+All values must be literals (strings, numbers, booleans, arrays, plain
+objects). Use `.mjs` for portable ESM and `.cjs` for portable CommonJS. A
+`.js` config may use either the ESM default-export form or the CommonJS
+`module.exports` form; both are parsed statically.
 
 ## Changed-only gates
 
