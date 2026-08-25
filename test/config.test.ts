@@ -81,6 +81,7 @@ describe("configuration", () => {
   it("loads the README TypeScript defineConfig import from a packed installed package", () => {
     const project = tempProject();
     const packageRoot = path.resolve(__dirname, "..");
+    fs.writeFileSync(path.join(project, "package.json"), "{}\n");
     const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", project], {
       cwd: packageRoot, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     })) as Array<{ filename: string }>;
@@ -89,6 +90,17 @@ describe("configuration", () => {
     execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", path.join(project, tarball!)], {
       cwd: project, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     });
+    const installedManifest = JSON.parse(fs.readFileSync(
+      path.join(project, "node_modules", "@gligor", "crap4ts", "package.json"),
+      "utf8",
+    )) as { dependencies?: Record<string, string>; peerDependencies?: Record<string, string> };
+    const consumerLock = JSON.parse(fs.readFileSync(path.join(project, "package-lock.json"), "utf8")) as {
+      packages: Record<string, { dependencies?: Record<string, string>; peer?: boolean; version?: string }>;
+    };
+    expect(installedManifest.dependencies ?? {}).not.toHaveProperty("typescript");
+    expect(installedManifest.peerDependencies).toEqual({ typescript: ">=5 <7" });
+    expect(consumerLock.packages[""]?.dependencies).not.toHaveProperty("typescript");
+    expect(consumerLock.packages["node_modules/typescript"]).toMatchObject({ peer: true, version: "6.0.3" });
     fs.writeFileSync(path.join(project, "crap4ts.config.ts"), [
       'import { defineConfig } from "@gligor/crap4ts";',
       "",
@@ -98,7 +110,7 @@ describe("configuration", () => {
 
     const installedCli = path.join(project, "node_modules", "@gligor", "crap4ts", "dist", "cli.js");
     const result = runCli(project, ["--coverage", "coverage.json", "--json"], true, installedCli);
-    expect(result.code).toBe(0);
+    expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).summary.threshold).toBe(100);
   }, 15_000);
 
