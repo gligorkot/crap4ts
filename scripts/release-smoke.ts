@@ -23,23 +23,32 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8"));
+interface PackageManifest {
+  readonly name: string;
+}
 
-/** @param {string} label @param {string} command @param {string[]} args @param {{cwd?: string, env?: Record<string,string>, input?: string}} [options] */
-function run(label, command, args, options = {}) {
+interface RunOptions {
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly input?: string;
+}
+
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as PackageManifest;
+
+function run(label: string, command: string, args: readonly string[], options: RunOptions = {}): string {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? projectRoot,
     encoding: "utf8",
     shell: false,
-    input: options.input ?? undefined,
+    ...(options.input !== undefined ? { input: options.input } : {}),
     env: options.env ? { ...process.env, ...options.env } : process.env,
   });
   if (result.status !== 0 || result.error) {
     process.stderr.write(`[release-smoke] FAILED: ${label}\n`);
     if (result.stdout) process.stderr.write(`--- stdout ---\n${result.stdout}\n`);
     if (result.stderr) process.stderr.write(`--- stderr ---\n${result.stderr}\n`);
-    process.exit(result.status && Number.isInteger(result.status) ? result.status : 1);
+    process.exit(result.status !== null && Number.isInteger(result.status) ? result.status : 1);
   }
   return result.stdout ?? "";
 }
@@ -180,7 +189,8 @@ export default defineConfig({
 
   console.log("[release-smoke] OK: tarball install, CLI, ESM import, CommonJS require, and static TS defineConfig all verified.");
 } catch (error) {
-  process.stderr.write(`[release-smoke] FAILED: ${error?.message ?? error}\n`);
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`[release-smoke] FAILED: ${message}\n`);
   try {
     process.stderr.write(`--- consumer dir contents ---\n${readdirSync(join(workspace, "consumer")).join("\n")}\n`);
   } catch {

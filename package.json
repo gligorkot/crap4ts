@@ -48,7 +48,7 @@
     "build": "tsc && tsc -p tsconfig.cjs.json && node scripts/write-cjs-package-json.mjs",
     "prepack": "npm run build",
     "self-score": "tsx scripts/self-score.ts",
-    "release-smoke": "node scripts/release-smoke.mjs"
+    "release-smoke": "tsx scripts/release-smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

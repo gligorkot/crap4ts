@@ -13,12 +13,12 @@ const packageJson = JSON.parse(readFileSync(resolve(projectRoot, "package.json")
   version: string;
   scripts: Record<string, string>;
 };
-const smokeScript = readFileSync(resolve(projectRoot, "scripts/release-smoke.mjs"), "utf8");
+const smokeScript = readFileSync(resolve(projectRoot, "scripts/release-smoke.ts"), "utf8");
 const changelog = readFileSync(resolve(projectRoot, "CHANGELOG.md"), "utf8");
 
 describe("release smoke wiring", () => {
   it("exposes the smoke check as an npm script", () => {
-    expect(packageJson.scripts["release-smoke"]).toBe("node scripts/release-smoke.mjs");
+    expect(packageJson.scripts["release-smoke"]).toBe("tsx scripts/release-smoke.ts");
   });
 
   it("runs the smoke check in the publish workflow before npm publish, only when publishing", () => {
