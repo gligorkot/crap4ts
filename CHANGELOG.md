@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0
+
+### Added: compact Markdown reports
+
+Markdown reports are now compact by default: they retain the heading, changed-only
+filter metadata, and summary while omitting per-function rows. Pass `--with-table`
+to the CLI to include the existing GFM table. The GitHub Action behaves the same
+way; set its `with-table` input to `"true"` to include rows in the job summary.
+JSON and human output are unchanged.
+
 ## 1.0.1
 
 ### Fixed: summary-first Markdown report

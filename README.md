@@ -38,8 +38,11 @@ npx crap4ts src --coverage coverage/coverage-final.json --threshold 8
 # JSON output for CI tooling
 npx crap4ts src --coverage coverage/coverage-final.json --json
 
-# Markdown table for a pull-request/job summary
+# Markdown summary for a pull-request/job summary (compact by default)
 npx crap4ts src --coverage coverage/coverage-final.json --format markdown
+
+# Include per-function rows in the Markdown report
+npx crap4ts src --coverage coverage/coverage-final.json --format markdown --with-table
 # --markdown is an alias for --format markdown
 
 # Multiple source paths
@@ -54,7 +57,8 @@ npx crap4ts src lib --coverage coverage/coverage-final.json
 | `--config <path>` | Load exactly this TS, ESM (`.mjs`), CommonJS (`.cjs`), module-system-dependent JS (`.js`), or JSON configuration file. | auto-discovery |
 | `--threshold <number>` | Override every configured CRAP failure threshold; breach when score > threshold. | `8` |
 | `--changed-since <git-ref>` | Gate only committed functions changed between `HEAD` and the merge base of this ref and `HEAD`. | off |
-| `--format <human\|json\|markdown>` | Select human-readable, JSON, or PR-friendly Markdown table output. | `human` |
+| `--format <human\|json\|markdown>` | Select human-readable, JSON, or compact PR-friendly Markdown output. | `human` |
+| `--with-table` | Include per-function rows in Markdown output. Ignored for human and JSON output. | off |
 | `--markdown` | Alias for `--format markdown`. | off |
 | `--json` | Alias for `--format json`. | off |
 | `--help` | Print usage and exit. | — |
@@ -83,14 +87,17 @@ anything.
     coverage: coverage/coverage-final.json
     src: src
     threshold: 8
+    # Optional: include per-function rows; the job summary is compact by default.
+    with-table: "true"
 ```
 
 If the CLI is not installed (no `node_modules/.bin/crap4ts`), the action fails
 immediately with a clear error instead of falling back to any other binary.
 
 The action does not generate coverage, upload artifacts, or comment
-on pull requests. It executes the locally installed CLI, writes the Markdown report to
-`$GITHUB_STEP_SUMMARY` and exposes `breached-count`, `max-crap`, and `pass`
+on pull requests. It executes the locally installed CLI, writes a compact Markdown
+report to `$GITHUB_STEP_SUMMARY` by default, and includes per-function rows only
+when its `with-table` input is `"true"`. It exposes `breached-count`, `max-crap`, and `pass`
 (`"true"`/`"false"`) outputs. Exit codes: `0` on pass, `2` when the threshold is
 breached (outputs and summary are written first either way); any other non-zero exit
 propagates unchanged. Dynamic function names and file paths are rendered as escaped

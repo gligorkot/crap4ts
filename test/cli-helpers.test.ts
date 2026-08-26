@@ -49,6 +49,7 @@ describe("parseArgsPure", () => {
       "--config", "crap.config.ts",
       "--changed-since", "main",
       "--format", "markdown",
+      "--with-table",
     ]);
     expect(args).toEqual({
       sourcePaths: ["src/a.ts", "src/b.ts"],
@@ -57,6 +58,7 @@ describe("parseArgsPure", () => {
       configPath: "crap.config.ts",
       changedSince: "main",
       format: "markdown",
+      withTable: true,
     });
   });
 
@@ -67,6 +69,12 @@ describe("parseArgsPure", () => {
     expect(args.threshold).toBeUndefined();
     expect(args.configPath).toBeUndefined();
     expect(args.changedSince).toBeUndefined();
+    expect(args.withTable).toBe(false);
+  });
+
+  it("parses --with-table as an opt-in Markdown table flag", () => {
+    const args = parseArgsPure(["node", "cli.ts", "--coverage", "c.json", "--format", "markdown", "--with-table"]);
+    expect(args.withTable).toBe(true);
   });
 
   it("treats --json as format json", () => {
@@ -179,9 +187,15 @@ describe("renderReportFor", () => {
     expect(parsed.summary.threshold).toBe(8);
   });
 
-  it("renders Markdown via --format markdown with the documented table header", () => {
+  it("renders compact Markdown via --format markdown by default", () => {
     const out = renderReportFor("markdown", sampleReport());
     expect(out).toContain("## CRAP Report");
+    expect(out).toContain("**Gate:**");
+    expect(out).not.toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+  });
+
+  it("renders the Markdown table only when requested", () => {
+    const out = renderReportFor("markdown", sampleReport(), true);
     expect(out).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
   });
 

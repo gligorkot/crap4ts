@@ -1,6 +1,6 @@
 {
   "name": "@gligor/crap4ts",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "CRAP metric analyzer for TypeScript/TSX source from V8 coverage",
   "keywords": [
     "crap",

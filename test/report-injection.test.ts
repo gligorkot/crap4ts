@@ -42,7 +42,7 @@ function makeFn(name: string, complexity: number, coverage: number): FunctionCov
 describe("renderMarkdownReport injection resistance", () => {
   it.each(ADVERSARIAL_NAMES)("renders %j as literal content", (hostile) => {
     const report = buildReport([makeFn(hostile, 4, 0)], 8);
-    const md = renderMarkdownReport(report);
+    const md = renderMarkdownReport(report, { withTable: true });
     const rowLine = md.split("\n").find((l) => l.startsWith(`| \`${hostile.slice(0, 4)}`) || l.includes("\\|") || l.startsWith("| ⚠️"));
 
     // Unsafe content is rendered as a literal code span; punctuation is
@@ -60,7 +60,7 @@ describe("renderMarkdownReport injection resistance", () => {
 
   it("never emits CR or LF from dynamic cell values (no new table rows or blocks)", () => {
     const hostile = "fn\n| injected | row |\n<script>";
-    const md = renderMarkdownReport(buildReport([makeFn(hostile, 4, 0)], 8));
+    const md = renderMarkdownReport(buildReport([makeFn(hostile, 4, 0)], 8), { withTable: true });
     const dataLines = md.split("\n").filter((l) => l.startsWith("|"));
     // Header + separator + one data row only.
     expect(dataLines).toHaveLength(3);
@@ -71,7 +71,7 @@ describe("renderMarkdownReport injection resistance", () => {
   });
 
   it("escapes pipes so adversarial names cannot add columns to the table", () => {
-    const md = renderMarkdownReport(buildReport([makeFn("a|b|c", 4, 0)], 8));
+    const md = renderMarkdownReport(buildReport([makeFn("a|b|c", 4, 0)], 8), { withTable: true });
     const dataRow = md.split("\n").find((l) => l.startsWith("| ") && !l.startsWith("| Function") && !l.startsWith("| ---"));
     expect(dataRow).toBeDefined();
     // 7 columns => exactly 8 pipes; escaped pipes don't count.
@@ -79,7 +79,7 @@ describe("renderMarkdownReport injection resistance", () => {
   });
 
   it("uses a longer delimiter when unsafe values contain backticks", () => {
-    const md = renderMarkdownReport(buildReport([makeFn("x`y", 4, 0)], 8));
+    const md = renderMarkdownReport(buildReport([makeFn("x`y", 4, 0)], 8), { withTable: true });
     expect(md).toContain(literalCode("x\\`y"));
   });
 
@@ -96,7 +96,7 @@ describe("renderMarkdownReport injection resistance", () => {
       complexity: 4,
       filePath: "/src/[x](https://evil.example)/a.ts",
     };
-    const md = renderMarkdownReport(buildReport([{ functionInfo: fi, coverage: 0, matched: true, totalStatements: 1, coveredStatements: 0 }], 8));
+    const md = renderMarkdownReport(buildReport([{ functionInfo: fi, coverage: 0, matched: true, totalStatements: 1, coveredStatements: 0 }], 8), { withTable: true });
     expect(md).not.toMatch(/\]\(https?:\/\//);
   });
 });
