@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           # Buffer the COMPLETE candidate summary (policy block + Markdown
-          # report + expected-exit note) in a temp file. Only after the CLI
+          # report + accepted-exit note) in a temp file. Only after the CLI
           # exits 0 or 2 do we append it to $GITHUB_STEP_SUMMARY, so an
           # unexpected exit leaves an initially populated summary untouched.
           #

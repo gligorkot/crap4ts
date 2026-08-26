@@ -110,7 +110,7 @@ describe("CI CRAP report", () => {
       expect(stderr).toContain("cli diagnostic");
     });
 
-    it("expected exit 2 appends policy block, report, and note to the summary", () => {
+    it("accepted exit 2 appends policy block, report, and note to the summary", () => {
       const before = writeSummaryFile();
       runScript(2);
 
