@@ -1,6 +1,6 @@
 {
   "name": "@gligor/crap4ts",
-  "version": "0.2.1",
+  "version": "1.0.0",
   "description": "CRAP metric analyzer for TypeScript/TSX source from V8 coverage",
   "keywords": [
     "crap",
@@ -47,7 +47,8 @@
     "coverage": "vitest run --coverage",
     "build": "tsc && tsc -p tsconfig.cjs.json && node scripts/write-cjs-package-json.mjs",
     "prepack": "npm run build",
-    "self-score": "tsx scripts/self-score.ts"
+    "self-score": "tsx scripts/self-score.ts",
+    "release-smoke": "tsx scripts/release-smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
