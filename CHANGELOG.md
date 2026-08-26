@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1
+
+### Fixed: summary-first Markdown report
+
+In the GitHub Action job summary (and `--format markdown` output), the
+summary line (Threshold / Functions / Max CRAP / Breached / Gate) is now
+rendered before the functions table, so the table is the final content for
+non-empty reports. Empty-report output is unchanged.
+
 ## 1.0.0
 
 ### Breaking: static declarative configuration only

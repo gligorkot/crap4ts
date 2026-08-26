@@ -317,6 +317,15 @@ export function renderMarkdownReport(report: CrapReport): string {
     return lines.join("\n");
   }
 
+  lines.push("");
+  const gate = report.summary.breached ? "❌ FAIL" : "✅ PASS";
+  lines.push(
+    `**Threshold:** ${report.summary.threshold} · **Functions:** ${report.summary.totalFunctions}` +
+    ` · **Max CRAP:** ${report.summary.maxCrap.toFixed(1)}` +
+    ` · **Breached:** ${report.summary.breachedCount} function(s) · **Gate:** ${gate}`,
+  );
+  lines.push("");
+
   lines.push("| Function | File | Line | CC | Cov | Threshold | CRAP |");
   lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
   for (const row of report.rows) {
@@ -333,13 +342,5 @@ export function renderMarkdownReport(report: CrapReport): string {
       `| ${row.crap.toFixed(1)} |`,
     );
   }
-
-  lines.push("");
-  const gate = report.summary.breached ? "❌ FAIL" : "✅ PASS";
-  lines.push(
-    `**Threshold:** ${report.summary.threshold} · **Functions:** ${report.summary.totalFunctions}` +
-    ` · **Max CRAP:** ${report.summary.maxCrap.toFixed(1)}` +
-    ` · **Breached:** ${report.summary.breachedCount} function(s) · **Gate:** ${gate}`,
-  );
   return lines.join("\n");
 }
