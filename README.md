@@ -411,17 +411,20 @@ jobs:
       - name: CRAP report (threshold 8; diagnostic)
         run: |
           # Append the built CLI's Markdown report to $GITHUB_STEP_SUMMARY.
-          # Exit 2 is accepted as the expected outcome of this intentionally
-          # informational report; every other nonzero exit fails the job and
-          # never publishes a summary.
+          # Exit 0 is the expected outcome while the report is clean; exit 2
+          # is accepted only if this informational diagnostic finds threshold
+          # breaches. Every other nonzero exit fails the job and never
+          # publishes a summary.
           node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown
       - run: npm run self-score
 ```
 
 The CLI's default threshold is **8**. CI publishes the built CLI's
 threshold-8 own-source report to the GitHub Job Summary as an intentional,
-informational diagnostic: it is visible on every run and does not fail the job
-on its expected exit code 2. The **enforced** own-source threshold-8 gate is
+informational diagnostic: it is visible on every run and does not fail the
+job while the repository's own source is clean (exit 0, the current and
+expected outcome). Exit code 2 is accepted only if the diagnostic finds
+threshold breaches. The **enforced** own-source threshold-8 gate is
 the `self-score` script described below.
 
 The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the
