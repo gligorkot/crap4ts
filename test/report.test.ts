@@ -131,13 +131,25 @@ describe("renderJsonReport", () => {
 });
 
 describe("renderMarkdownReport", () => {
-  it("renders a Markdown table with header separator and summary", () => {
+  it("omits the per-function table by default while retaining the summary", () => {
     const report = buildReport(
       [makeFn("ok", 1, 1, 1, 1), makeFn("bad", 4, 1, 1, 0)],
       8,
     );
     const text = renderMarkdownReport(report);
     expect(text).toContain("## CRAP Report");
+    expect(text).toContain("**Threshold:** 8");
+    expect(text).toContain("**Gate:** ❌ FAIL");
+    expect(text).not.toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+    expect(text).not.toContain("⚠️ bad");
+  });
+
+  it("renders a Markdown table with header separator when requested", () => {
+    const report = buildReport(
+      [makeFn("ok", 1, 1, 1, 1), makeFn("bad", 4, 1, 1, 0)],
+      8,
+    );
+    const text = renderMarkdownReport(report, { withTable: true });
     expect(text).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
     expect(text).toContain("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
     expect(text).toContain("bad");
@@ -147,7 +159,7 @@ describe("renderMarkdownReport", () => {
 
   it("marks breached rows with a warning emoji", () => {
     const report = buildReport([makeFn("bad", 4, 1, 1, 0)], 8);
-    const text = renderMarkdownReport(report);
+    const text = renderMarkdownReport(report, { withTable: true });
     expect(text).toContain("⚠️ bad");
   });
 
@@ -159,7 +171,7 @@ describe("renderMarkdownReport", () => {
 
   it("keeps ordinary function names and paths plain", () => {
     const report = buildReport([makeFn("normal_name", 2, 1, 1, 1)], 8);
-    const text = renderMarkdownReport(report);
+    const text = renderMarkdownReport(report, { withTable: true });
     expect(text).toContain("| normal_name | /src/normal_name.ts |");
     expect(text).not.toContain("`normal_name`");
     expect(text).not.toContain("`/src/normal_name.ts`");
@@ -183,13 +195,13 @@ describe("renderMarkdownReport", () => {
 
   it("escapes pipe characters in cell values", () => {
     const report = buildReport([makeFn("weird|name", 2, 1, 1, 0.5)], 8);
-    const text = renderMarkdownReport(report);
+    const text = renderMarkdownReport(report, { withTable: true });
     expect(text).toContain("weird\\|name");
   });
 
   it("renders summary before the table so non-empty reports end with the table", () => {
     const report = buildReport([makeFn("bad", 4, 1, 1, 0)], 8);
-    const text = renderMarkdownReport(report);
+    const text = renderMarkdownReport(report, { withTable: true });
     const summaryIndex = text.indexOf("**Threshold:**");
     const tableIndex = text.indexOf("| Function | File | Line | CC | Cov | Threshold | CRAP |");
     expect(summaryIndex).toBeGreaterThan(-1);

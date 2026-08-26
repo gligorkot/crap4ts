@@ -48,6 +48,8 @@ export interface ParsedCliArgs {
   readonly configPath?: string;
   readonly changedSince?: string;
   readonly format: CliOutputFormat;
+  /** Include per-function rows in Markdown output. */
+  readonly withTable: boolean;
 }
 
 /** Error raised for invalid CLI input; the message is user-facing. */
@@ -95,6 +97,7 @@ export function usageText(): string {
     "  --threshold <number>  Override configured CRAP failure threshold",
     "  --changed-since <ref> Analyze only functions changed since ref's merge base with HEAD",
     "  --format <format>     Output format: human (default), json, or markdown",
+    "  --with-table          Include per-function rows in Markdown output",
     "  --markdown            Deprecated alias for --format markdown",
     "  --json                Output JSON report (equivalent to --format json)",
     "  --help                Show this help",
@@ -138,12 +141,13 @@ interface ArgParseState {
   configPath?: string;
   changedSince?: string;
   format: CliOutputFormat;
+  withTable: boolean;
   sourcePaths: string[];
 }
 
 /** Fresh parse state for a new argv: human format, no paths or values. */
 function initialArgParseState(): ArgParseState {
-  return { format: "human", sourcePaths: [] };
+  return { format: "human", withTable: false, sourcePaths: [] };
 }
 
 /**
@@ -218,6 +222,7 @@ function applyBareArg(state: ArgParseState, arg: string, value: string | undefin
   }
   if (arg === "--json") state.format = "json";
   else if (arg === MARKDOWN_ALIAS) state.format = "markdown";
+  else if (arg === "--with-table") state.withTable = true;
   else if (arg.startsWith("--")) throw new CliArgError(`unknown option "${arg}"`);
   else state.sourcePaths.push(arg);
   return false;
@@ -261,6 +266,7 @@ export function parseArgsPure(argv: readonly string[]): ParsedCliArgs {
     ...(state.configPath === undefined ? {} : { configPath: state.configPath }),
     ...(state.changedSince === undefined ? {} : { changedSince: state.changedSince }),
     format: state.format,
+    withTable: state.withTable,
   };
 }
 
@@ -279,11 +285,12 @@ export function isHelpRequest(argv: readonly string[]): boolean {
  *
  * @param format - Target output format.
  * @param report - Report to render.
+ * @param withTable - Include per-function rows for Markdown output.
  * @returns The rendered report body (without trailing newline).
  */
-export function renderReportFor(format: CliOutputFormat, report: CrapReport): string {
+export function renderReportFor(format: CliOutputFormat, report: CrapReport, withTable = false): string {
   if (format === "json") return renderJsonReport(report);
-  if (format === "markdown") return renderMarkdownReport(report);
+  if (format === "markdown") return renderMarkdownReport(report, { withTable });
   return renderHumanReport(report);
 }
 
@@ -609,7 +616,7 @@ export function writeReportAndExit(
     (filePath) => thresholdForPath(filePath, configRoot, ctx.loaded?.config, ctx.args.threshold),
     filter,
   );
-  io.out(renderReportFor(ctx.args.format, report) + "\n");
+  io.out(renderReportFor(ctx.args.format, report, ctx.args.withTable) + "\n");
   if (!report.summary.breached) {
     io.exit(0);
     return;

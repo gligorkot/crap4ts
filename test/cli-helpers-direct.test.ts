@@ -198,6 +198,7 @@ describe("scan order and composition (scanArgs extraction)", () => {
       configPath: "crap.config.ts",
       changedSince: "main",
       format: "markdown",
+      withTable: false,
     });
   });
 

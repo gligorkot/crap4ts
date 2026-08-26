@@ -51,12 +51,18 @@ describe("CLI integration", () => {
     expect(parsed.summary.breached).toBe(false);
   });
 
-  it("renders a Markdown table with --format markdown and exits 2 on breach", () => {
+  it("renders compact Markdown with --format markdown and exits 2 on breach", () => {
     const result = runCli([FIXTURE, "--coverage", COVERAGE, "--format", "markdown", "--threshold", "8"]);
     expect(result.code).toBe(2);
     expect(result.stdout).toContain("## CRAP Report");
-    expect(result.stdout).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+    expect(result.stdout).not.toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
     expect(result.stderr).toContain("CRAP threshold exceeded");
+  });
+
+  it("renders a Markdown table with --with-table", () => {
+    const result = runCli([FIXTURE, "--coverage", COVERAGE, "--format", "markdown", "--with-table", "--threshold", "8"]);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
   });
 
   it("supports --markdown as a compatibility alias for --format markdown", () => {
