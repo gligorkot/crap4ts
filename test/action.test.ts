@@ -15,6 +15,8 @@ describe("composite action", () => {
     expect(action).toContain("coverage/coverage-final.json");
     expect(action).toMatch(/^    default: "?src"?$/m);
     expect(action).toMatch(/^    default: "?8"?$/m);
+    expect(action).toMatch(/^  with-table:$/m);
+    expect(action).toMatch(/^    default: "false"$/m);
   });
 
   it("exposes breached-count, max-crap, and pass outputs", () => {
@@ -93,7 +95,7 @@ describe("action step semantics (controlled local CLI fixture)", () => {
   // real — without shipping or requiring a committed bundle.
   const fixtureCli = join(testDirectory, "fixtures", "fake-crap4ts.cjs");
 
-  const runStep = (threshold: string): { status: number; outputs: Record<string, string>; summary: string } => {
+  const runStep = (threshold: string, withTable = "false"): { status: number; outputs: Record<string, string>; summary: string } => {
     const workdir = mkdtempSync(join(tmpdir(), "crap4ts-action-step-"));
     try {
       const binDir = join(workdir, "node_modules", ".bin");
@@ -127,6 +129,7 @@ describe("action step semantics (controlled local CLI fixture)", () => {
         COVERAGE_FILE: "coverage-final.json",
         SOURCE_PATH: "src",
         CRAP_THRESHOLD: threshold,
+        WITH_TABLE: withTable,
         // No GITHUB_ACTION_PATH: the action must not depend on the checkout.
       };
 
@@ -191,9 +194,20 @@ describe("action step semantics (controlled local CLI fixture)", () => {
     expect(result.summary).toContain("PASS");
   });
 
-  it("renders ordinary file names as readable plain text", () => {
-    const result = runStep("8");
+  it("renders ordinary file names as readable plain text when the table is requested", () => {
+    const result = runStep("8", "true");
     expect(result.summary).toContain("src/sample.ts");
     expect(result.summary).not.toContain("`src/sample.ts`");
+  });
+
+  it("omits the table from the job summary by default", () => {
+    const result = runStep("8");
+    expect(result.summary).toContain("**Gate:** ❌ FAIL");
+    expect(result.summary).not.toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+  });
+
+  it("includes the table in the job summary when with-table is true", () => {
+    const result = runStep("8", "true");
+    expect(result.summary).toContain("| Function | File | Line | CC | Cov | Threshold | CRAP |");
   });
 });

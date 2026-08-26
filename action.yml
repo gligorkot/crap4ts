@@ -18,6 +18,10 @@ inputs:
     description: "CRAP failure threshold"
     required: false
     default: "8"
+  with-table:
+    description: "Include the per-function Markdown table in the job summary"
+    required: false
+    default: "false"
 
 outputs:
   breached-count:
@@ -39,6 +43,7 @@ runs:
         COVERAGE_FILE: ${{ inputs.coverage }}
         SOURCE_PATH: ${{ inputs.src }}
         CRAP_THRESHOLD: ${{ inputs.threshold }}
+        WITH_TABLE: ${{ inputs.with-table }}
       run: |
         set -euo pipefail
 
@@ -99,7 +104,9 @@ runs:
           const { appendFileSync, readFileSync } = require("node:fs");
           const { renderMarkdownReport } = require(process.env.REPORT_CJS);
           const report = JSON.parse(readFileSync(process.env.JSON_FILE, "utf8"));
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderMarkdownReport(report) + "\n\n");
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderMarkdownReport(report, {
+            withTable: process.env.WITH_TABLE === "true",
+          }) + "\n\n");
         '
 
         exit "$status"
