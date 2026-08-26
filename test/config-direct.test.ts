@@ -276,4 +276,55 @@ describe("config file loading", () => {
     fs.writeFileSync(path.join(project, "d.json"), JSON.stringify({ version: 1, src: "src" }));
     expect((await loadConfig(project, "d.json"))?.config.src).toBe("src");
   });
+
+  it("anchors a nested explicit config's src to the config directory, not the invocation root", async () => {
+    // Layout: <project>/configs/check.json with src "src" — only
+    // <project>/configs/src exists. Validation resolves src against the
+    // config directory; the loaded result must expose the same base so CLI
+    // analysis matches exactly what was validated.
+    const project = tempProject();
+    fs.mkdirSync(path.join(project, "configs", "src"), { recursive: true });
+    fs.writeFileSync(path.join(project, "configs", "check.json"), JSON.stringify({ version: 1, src: "src", threshold: 3 }));
+
+    const loaded = await loadConfig(project, path.join("configs", "check.json"));
+    expect(loaded?.configRoot).toBe(fs.realpathSync(path.join(project, "configs")));
+    expect(loaded?.projectRoot).toBe(fs.realpathSync(project));
+  });
+
+  it("matches exclusion and threshold globs against the config directory for nested configs", async () => {
+    const project = tempProject();
+    fs.mkdirSync(path.join(project, "configs", "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(project, "configs", "check.json"),
+      JSON.stringify({
+        version: 1,
+        src: "src",
+        exclude: ["src/generated.ts"],
+        thresholds: [{ glob: "src/special.ts", threshold: 20 }],
+      }),
+    );
+    const loaded = await loadConfig(project, path.join("configs", "check.json"));
+    if (loaded === undefined) throw new Error("expected the nested config to load");
+
+    const matchedFile = path.join(loaded.configRoot, "src", "special.ts");
+    const excludedFile = path.join(loaded.configRoot, "src", "generated.ts");
+    expect(isConfigExcluded(excludedFile, loaded.configRoot, loaded.config)).toBe(true);
+    expect(isConfigExcluded(matchedFile, loaded.configRoot, loaded.config)).toBe(false);
+    expect(thresholdForPath(matchedFile, loaded.configRoot, loaded.config, undefined)).toBe(20);
+    // The same globs must NOT match files under an unrelated root.
+    expect(isConfigExcluded(excludedFile, project, loaded.config)).toBe(false);
+    expect(matchesConfigPattern(matchedFile, project, "src/special.ts")).toBe(false);
+  });
+
+  it("keeps discovery anchored at the project root while exposing its own config root", async () => {
+    const project = tempProject();
+    fs.writeFileSync(
+      path.join(project, "crap4ts.config.ts"),
+      "export default { version: 1, src: 'src', threshold: 9 };",
+    );
+    const loaded = await loadConfig(project);
+    if (loaded === undefined) throw new Error("expected the discovered config to load");
+    expect(loaded.configRoot).toBe(fs.realpathSync(project));
+    expect(loaded.configRoot).toBe(loaded.projectRoot);
+  });
 });

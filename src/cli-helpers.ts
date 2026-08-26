@@ -111,16 +111,17 @@ export function usageText(): string {
 export const MARKDOWN_ALIAS = "--markdown";
 
 /**
- * Resolve configured source paths against the project root.
+ * Resolve configured source paths against the given base directory (the
+ * config file's directory for loaded configs).
  *
  * A single string becomes a one-element list; undefined yields an empty list.
  */
 export function resolveConfigSourcePaths(
   src: string | readonly string[] | undefined,
-  projectRoot: string,
+  baseDir: string,
 ): string[] {
   const paths = src === undefined ? [] : typeof src === "string" ? [src] : [...src];
-  return paths.map((entry) => path.resolve(projectRoot, entry));
+  return paths.map((entry) => path.resolve(baseDir, entry));
 }
 
 const VALUE_OPTIONS = new Set(["--coverage", "--config", "--threshold", "--changed-since", "--format"]);
@@ -405,8 +406,10 @@ export interface CliRunContext {
 
 /** Resolved run inputs: where to analyze and which config applies. */
 export interface ResolvedCliRun {
-  /** Project root the config source paths resolve against. */
+  /** Project root the run was invoked in (contains the config file). */
   readonly projectRoot: string;
+  /** Directory of the loaded config; base for config-relative paths and globs. */
+  readonly configRoot: string;
   /** Resolved source paths the run analyzes. */
   readonly sourcePaths: string[];
   /** Effective config object, when one was loaded. */
@@ -440,15 +443,18 @@ export function effectiveChangedSince(
  * Resolve the source paths the run analyzes.
  *
  * CLI-provided paths are resolved against `cwd`; otherwise the configured
- * `src` paths are resolved against the project root.
+ * `src` paths are resolved against the config file's directory, so a nested
+ * `--config` file analyzes what its own `src` validates. Glob matching for
+ * exclusions and per-path thresholds also uses the config directory.
  */
 export function resolveCliRun(ctx: CliRunContext, cwd: string): ResolvedCliRun {
   const loaded = ctx.loaded;
   const projectRoot = loaded?.projectRoot ?? cwd;
+  const configRoot = loaded?.configRoot ?? cwd;
   const sourcePaths = ctx.args.sourcePaths.length > 0
     ? ctx.args.sourcePaths.map((entry) => path.resolve(cwd, entry))
-    : resolveConfigSourcePaths(loaded?.config.src, projectRoot);
-  return { projectRoot, sourcePaths, config: loaded?.config, loaded };
+    : resolveConfigSourcePaths(loaded?.config.src, configRoot);
+  return { projectRoot, configRoot, sourcePaths, config: loaded?.config, loaded };
 }
 
 /**
@@ -585,14 +591,14 @@ function readCoverageOrExit(coverageFilePath: string, io: CliIo) {
  * run: exit 2 with the breach line on stderr when the gate failed, else exit 0.
  *
  * @param ctx - Run context (contributes format and threshold resolver inputs).
- * @param projectRoot - Project root for per-path threshold resolution.
+ * @param configRoot - Directory of the loaded config, for per-path threshold resolution.
  * @param functionCoverage - Eligible per-function coverage entries.
  * @param filter - Changed-only filter, when active.
  * @param io - Output/exit surface.
  */
 export function writeReportAndExit(
   ctx: CliRunContext,
-  projectRoot: string,
+  configRoot: string,
   functionCoverage: readonly FunctionCoverage[],
   filter: ReportFilter | undefined,
   io: CliIo,
@@ -600,7 +606,7 @@ export function writeReportAndExit(
   const report = buildReport(
     [...functionCoverage],
     ctx.defaultThreshold,
-    (filePath) => thresholdForPath(filePath, projectRoot, ctx.loaded?.config, ctx.args.threshold),
+    (filePath) => thresholdForPath(filePath, configRoot, ctx.loaded?.config, ctx.args.threshold),
     filter,
   );
   io.out(renderReportFor(ctx.args.format, report) + "\n");
@@ -640,7 +646,7 @@ export function runCliPipeline(ctx: CliRunContext, io: CliIo, cwd: string): void
   const changed = loadChangedSince(ctx, cwd);
   assertSourcePathsExist(run.sourcePaths, io);
   assertCoverageFileExists(ctx, cwd, io);
-  const files = discoverSourceFilesExcluded(run.sourcePaths, run.projectRoot, run.config);
+  const files = discoverSourceFilesExcluded(run.sourcePaths, run.configRoot, run.config);
   if (files.length === 0) {
     writeEmptyResultFor(
       ctx.args.format,
@@ -668,7 +674,7 @@ export function runCliPipeline(ctx: CliRunContext, io: CliIo, cwd: string): void
       );
   writeReportAndExit(
     ctx,
-    run.projectRoot,
+    run.configRoot,
     functionCoverage,
     changedFilter(changed, effectiveChangedSince(ctx)),
     io,

@@ -36,7 +36,14 @@ export interface Crap4tsConfig {
 export interface LoadedConfig {
   readonly config: Crap4tsConfig;
   readonly configPath: string;
+  /**
+   * The invocation root that contained the selected or discovered config
+   * file. Kept distinct from {@link configRoot} so nested `--config` files
+   * stay anchored to their own directory for config-relative paths.
+   */
   readonly projectRoot: string;
+  /** Directory of the resolved config file; base for config-relative paths. */
+  readonly configRoot: string;
 }
 
 /** Validate and return a strict, versioned config for ergonomic JS/TS configs. */
@@ -70,12 +77,15 @@ export function loadConfig(
     throw new Error(`config path must resolve within the project root: ${configPath}`);
   }
   const config = readConfig(resolvedConfigPath);
-  return { config, configPath: resolvedConfigPath, projectRoot: root };
+  return { config, configPath: resolvedConfigPath, projectRoot: root, configRoot: path.dirname(resolvedConfigPath) };
 }
 
-/** Match a file path against a config glob relative to the project root. */
-export function matchesConfigPattern(filePath: string, projectRoot: string, pattern: string): boolean {
-  const relative = toPosix(path.relative(projectRoot, filePath));
+/**
+ * Match a file path against a config glob relative to `baseDir` (the config
+ * root for config globs, or the project root otherwise).
+ */
+export function matchesConfigPattern(filePath: string, baseDir: string, pattern: string): boolean {
+  const relative = toPosix(path.relative(baseDir, filePath));
   if (relative === "" || relative.startsWith("../") || path.isAbsolute(relative)) return false;
   return globToRegExp(pattern).test(relative);
 }
@@ -83,34 +93,34 @@ export function matchesConfigPattern(filePath: string, projectRoot: string, patt
 /** Return the configured threshold for a path; earlier rules win exact specificity ties. */
 export function thresholdForPath(
   filePath: string,
-  projectRoot: string,
+  baseDir: string,
   config: Crap4tsConfig | undefined,
   cliThreshold: number | undefined,
 ): number {
   if (cliThreshold !== undefined) return cliThreshold;
   if (config === undefined) return DEFAULT_THRESHOLD;
-  const winner = findMatchingThresholdRule(config.thresholds ?? [], filePath, projectRoot);
+  const winner = findMatchingThresholdRule(config.thresholds ?? [], filePath, baseDir);
   return winner?.threshold ?? config.threshold ?? DEFAULT_THRESHOLD;
 }
 
 /** Return true when a user config exclusion glob matches this source file. */
-export function isConfigExcluded(filePath: string, projectRoot: string, config: Crap4tsConfig | undefined): boolean {
+export function isConfigExcluded(filePath: string, baseDir: string, config: Crap4tsConfig | undefined): boolean {
   const patterns = config?.exclude === undefined
     ? []
     : typeof config.exclude === "string" ? [config.exclude] : config.exclude;
-  return patterns.some((pattern) => matchesConfigPattern(filePath, projectRoot, pattern));
+  return patterns.some((pattern) => matchesConfigPattern(filePath, baseDir, pattern));
 }
 
 /** Find the most specific matching threshold rule; earlier rules win exact specificity ties. */
 function findMatchingThresholdRule(
   rules: readonly PathThresholdRule[],
   filePath: string,
-  projectRoot: string,
+  baseDir: string,
 ): PathThresholdRule | undefined {
   let winner: PathThresholdRule | undefined;
   let winnerSpecificity: PatternSpecificity | undefined;
   for (const rule of rules) {
-    if (!matchesConfigPattern(filePath, projectRoot, rule.glob)) continue;
+    if (!matchesConfigPattern(filePath, baseDir, rule.glob)) continue;
     const specificity = patternSpecificity(rule.glob);
     if (winnerSpecificity === undefined || isMoreSpecific(specificity, winnerSpecificity)) {
       winner = rule;
@@ -269,34 +279,136 @@ function parseStaticModuleExport(source: string, configPath: string): unknown {
   if (diagnostics.length > 0) {
     throw new Error(formatParseDiagnostics(diagnostics, sf));
   }
-  return evaluateLiteralNode(findStaticExport(sf), sf);
+  return evaluateLiteralNode(findStaticExport(sf, configPath), sf);
 }
 
-/** Scan top-level statements and return the single declared export expression. */
-function findStaticExport(sf: ts.SourceFile): ts.Expression {
-  let exported: ts.Expression | undefined;
-  let sawStatement = false;
+/**
+ * Scan top-level statements and return the single declared export expression,
+ * enforcing the module system implied by the file extension:
+ *
+ * - `.ts` / `.mjs`: ESM static default exports only (`export default ...`,
+ *   optionally wrapped in `defineConfig(...)`).
+ * - `.cjs`: CommonJS only (`module.exports = ...`).
+ * - `.js`: either of the two forms above, but never both and never a bare
+ *   `exports =` assignment.
+ *
+ * A second accepted export is always rejected rather than silently overriding
+ * the first.
+ */
+function findStaticExport(sf: ts.SourceFile, configPath: string): ts.Expression {
+  const kind = exportGrammarFor(configPath);
+  let exported: { readonly expression: ts.Expression; readonly esm: boolean } | undefined;
   for (const statement of sf.statements) {
     if (ts.isImportDeclaration(statement)) continue; // allowed but never resolved/executed
+    if (isBareExportsAssignment(statement)) {
+      throw new Error("bare `exports =` assignment is not a valid config export; use `module.exports = ...`");
+    }
     const scanned = staticExportFromStatement(statement, sf);
     if (scanned === undefined) continue;
+    assertAcceptedSingleExport(kind, exported, scanned);
     exported = scanned;
-    sawStatement = true;
   }
-  if (!sawStatement || exported === undefined) {
-    throw new Error("config must export an object via export default or module.exports");
+  if (exported === undefined) {
+    throw new Error(`config must export an object via ${kind.expectedMessage}`);
   }
-  return exported;
+  return exported.expression;
+}
+
+/**
+ * Reject module-system mismatches and second exports outright; return
+ * otherwise so the caller can record the accepted export.
+ */
+function assertAcceptedSingleExport(
+  grammar: ExportGrammar,
+  previous: { readonly esm: boolean } | undefined,
+  scanned: { readonly esm: boolean },
+): void {
+  if (!grammarAllows(grammar, scanned.esm)) {
+    throw new Error(`${describeExport(scanned.esm)} syntax is not allowed in ${grammar.description}`);
+  }
+  if (previous !== undefined) {
+    throw new Error(
+      `config must contain exactly one export; found multiple (${describeExport(previous.esm)} and ${describeExport(scanned.esm)})`,
+    );
+  }
+}
+
+/** The exact static export grammar allowed for one config file extension. */
+interface ExportGrammar {
+  /** True when ESM `export default` forms are accepted. */
+  readonly esmAllowed: boolean;
+  /** True when CommonJS `module.exports =` is accepted. */
+  readonly cjsAllowed: boolean;
+  /** Human-readable description used in error messages. */
+  readonly description: string;
+  /** Message describing what an empty file must export. */
+  readonly expectedMessage: string;
+}
+
+const ESM_ONLY_GRAMMAR: ExportGrammar = {
+  esmAllowed: true,
+  cjsAllowed: false,
+  description: "a TypeScript/ESM config (.ts/.mjs)",
+  expectedMessage: "export default or export default defineConfig(...)",
+};
+
+const CJS_ONLY_GRAMMAR: ExportGrammar = {
+  esmAllowed: false,
+  cjsAllowed: true,
+  description: "a CommonJS config (.cjs)",
+  expectedMessage: "module.exports = { ... }",
+};
+
+const JS_EITHER_GRAMMAR: ExportGrammar = {
+  esmAllowed: true,
+  cjsAllowed: true,
+  description: "a JavaScript config (.js)",
+  expectedMessage: "export default ... or module.exports = { ... }",
+};
+
+/** Choose the accepted export grammar from the config file's extension. */
+function exportGrammarFor(configPath: string): ExportGrammar {
+  if (configPath.endsWith(".cjs") || configPath.endsWith(".cts")) return CJS_ONLY_GRAMMAR;
+  if (
+    configPath.endsWith(".ts")
+    || configPath.endsWith(".tsx")
+    || configPath.endsWith(".mts")
+    || configPath.endsWith(".mjs")
+  ) {
+    return ESM_ONLY_GRAMMAR;
+  }
+  return JS_EITHER_GRAMMAR;
+}
+
+/** True when the scanned export's module system fits this file's grammar. */
+function grammarAllows(grammar: ExportGrammar, esm: boolean): boolean {
+  return esm ? grammar.esmAllowed : grammar.cjsAllowed;
+}
+
+function describeExport(esm: boolean): string {
+  return esm ? "export default" : "module.exports";
+}
+
+/** True for a top-level bare `exports = ...` assignment (never valid). */
+function isBareExportsAssignment(statement: ts.Statement): boolean {
+  return ts.isExpressionStatement(statement)
+    && ts.isBinaryExpression(statement.expression)
+    && statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    && ts.isIdentifier(statement.expression.left)
+    && statement.expression.left.text === "exports";
 }
 
 /**
  * Interpret one non-import top-level statement. Returns the exported literal
- * expression, or undefined for statements that carry no export (currently
- * none beyond imports, which the caller skips).
+ * expression plus whether it was an ESM default export, or undefined when the
+ * statement carries no export.
  */
-function staticExportFromStatement(statement: ts.Statement, sf: ts.SourceFile): ts.Expression | undefined {
+function staticExportFromStatement(
+  statement: ts.Statement,
+  sf: ts.SourceFile,
+): { readonly expression: ts.Expression; readonly esm: boolean } | undefined {
   if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-    return requireLiteralExpression(statement.expression, "export default", sf);
+    return { expression: requireLiteralExpression(statement.expression, "export default", sf), esm: true };
   }
   if (isExportedVariableStatement(statement)) {
     // `export const config = { ... }` style exports are not part of the
@@ -304,7 +416,7 @@ function staticExportFromStatement(statement: ts.Statement, sf: ts.SourceFile): 
     throw new Error("unsupported export declaration; use export default");
   }
   if (isModuleExportsAssignment(statement)) {
-    return requireLiteralExpression(statement.expression.right, "module.exports", sf);
+    return { expression: requireLiteralExpression(statement.expression.right, "module.exports", sf), esm: false };
   }
   throw new Error(unsupportedStatementMessage(statement, sf));
 }

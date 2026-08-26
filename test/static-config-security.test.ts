@@ -200,3 +200,106 @@ describe("static declarative config loading (security)", () => {
     expect(() => loadConfig(project, "missing.json")).toThrow("config file cannot be read");
   });
 });
+
+describe("extension-specific static export grammar", () => {
+  function write(project: string, name: string, body: string): void {
+    fs.writeFileSync(path.join(project, name), body);
+  }
+
+  it("accepts exactly one ESM default export in .ts and .mjs files", () => {
+    const project = tempProject();
+    write(project, "ok.config.ts", "export default { version: 1, threshold: 2 };\n");
+    expect(loadConfig(project, "ok.config.ts")?.config.threshold).toBe(2);
+    write(project, "ok.config.mjs", "export default defineConfig({ version: 1, threshold: 3 });\n");
+    expect(loadConfig(project, "ok.config.mjs")?.config.threshold).toBe(3);
+  });
+
+  it("accepts module.exports in .cjs and either form in .js", () => {
+    const project = tempProject();
+    write(project, "ok.config.cjs", "module.exports = { version: 1, threshold: 4 };\n");
+    expect(loadConfig(project, "ok.config.cjs")?.config.threshold).toBe(4);
+    write(project, "esm.config.js", "export default { version: 1, threshold: 5 };\n");
+    expect(loadConfig(project, "esm.config.js")?.config.threshold).toBe(5);
+    write(project, "cjs.config.js", "module.exports = { version: 1, threshold: 6 };\n");
+    expect(loadConfig(project, "cjs.config.js")?.config.threshold).toBe(6);
+  });
+
+  it("rejects ESM default exports in .cjs files", () => {
+    const project = tempProject();
+    write(project, "bad.config.cjs", "export default { version: 1 };\n");
+    expect(() => loadConfig(project, "bad.config.cjs"))
+      .toThrow(/export default syntax is not allowed/);
+  });
+
+  it("rejects CommonJS assignments in .ts and .mjs files", () => {
+    const project = tempProject();
+    for (const extension of [".ts", ".mjs"]) {
+      const file = `bad.config${extension}`;
+      write(project, file, "module.exports = { version: 1 };\n");
+      expect(() => loadConfig(project, file))
+        .toThrow(/module\.exports syntax is not allowed/);
+    }
+  });
+
+  it("rejects a bare exports assignment in every extension", () => {
+    const project = tempProject();
+    for (const extension of [".ts", ".mjs", ".cjs", ".js"]) {
+      const file = `bare.config${extension}`;
+      write(project, file, "exports = { version: 1 };\n");
+      expect(() => loadConfig(project, file)).toThrow(/bare `exports =` assignment/);
+    }
+  });
+
+  it("rejects mixed ESM and CommonJS exports in .js files", () => {
+    const project = tempProject();
+    write(
+      project,
+      "mixed.config.js",
+      [
+        'import { defineConfig } from "@gligor/crap4ts";',
+        "",
+        "module.exports = { version: 1 };",
+        "export default defineConfig({ version: 1 });",
+        "",
+      ].join("\n"),
+    );
+    expect(() => loadConfig(project, "mixed.config.js"))
+      .toThrow(/config must contain exactly one export/);
+  });
+
+  it("rejects duplicate exports instead of silently accepting the last one", () => {
+    const project = tempProject();
+    write(
+      project,
+      "dup-esm.config.ts",
+      [
+        "export default { version: 1, threshold: 8 };",
+        "export default { version: 1, threshold: 9 };",
+        "",
+      ].join("\n"),
+    );
+    // The last export must NOT win: the duplicate is rejected outright.
+    expect(() => loadConfig(project, "dup-esm.config.ts"))
+      .toThrow(/config must contain exactly one export/);
+
+    write(
+      project,
+      "dup-cjs.config.cjs",
+      [
+        "module.exports = { version: 1, threshold: 8 };",
+        "module.exports = { version: 1, threshold: 9 };",
+        "",
+      ].join("\n"),
+    );
+    expect(() => loadConfig(project, "dup-cjs.config.cjs"))
+      .toThrow(/config must contain exactly one export/);
+  });
+
+  it("reports the extension-appropriate missing-export message", () => {
+    const project = tempProject();
+    write(project, "empty.config.ts", "");
+    expect(() => loadConfig(project, "empty.config.ts")).toThrow(/via export default/);
+    write(project, "empty.config.cjs", "");
+    expect(() => loadConfig(project, "empty.config.cjs")).toThrow(/via module\.exports/);
+  });
+});
