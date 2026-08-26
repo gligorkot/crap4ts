@@ -409,13 +409,35 @@ jobs:
       - run: npm run coverage
       - run: npm run build
       - name: CRAP report (threshold 8; diagnostic)
+        shell: bash
         run: |
-          # Append the built CLI's Markdown report to $GITHUB_STEP_SUMMARY.
-          # Exit 0 is the expected outcome while the report is clean; exit 2
-          # is accepted only if this informational diagnostic finds threshold
-          # breaches. Every other nonzero exit fails the job and never
-          # publishes a summary.
-          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown
+          # Buffer the complete candidate summary in a temp file and append it
+          # to $GITHUB_STEP_SUMMARY only after the CLI exits 0 or 2, so an
+          # unexpected exit leaves the summary untouched. Exit 0 is the
+          # expected outcome while the report is clean; exit 2 indicates
+          # threshold breaches, which are accepted because this diagnostic is
+          # informational. Every other nonzero exit fails the job.
+          candidate_summary="$(mktemp)"
+          report_output="$(mktemp)"
+          trap 'rm -f "$candidate_summary" "$report_output"' EXIT
+
+          {
+            echo "> ℹ️ **Diagnostic report:** informational; does not fail the job on exit 2. Enforcement happens in the \`self-score\` step."
+            echo
+          } > "$candidate_summary"
+
+          set +e
+          node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown > "$report_output"
+          status=$?
+          set -e
+
+          if [[ "$status" -eq 0 || "$status" -eq 2 ]]; then
+            cat "$report_output" >> "$candidate_summary"
+            cat "$candidate_summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat "$report_output" >&2
+            exit "$status"
+          fi
       - run: npm run self-score
 ```
 

@@ -117,7 +117,7 @@ describe("CI CRAP report", () => {
       const after = readFileSync(join(scratch, "summary.md"), "utf8");
       expect(after.startsWith(before)).toBe(true);
       expect(after).toContain("Diagnostic report");
-      expect(after).toContain("exited 2 as expected");
+      expect(after).toContain("exited 2, indicating threshold breaches");
     });
   });
 });

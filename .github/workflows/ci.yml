@@ -38,7 +38,8 @@ jobs:
           # unexpected exit leaves an initially populated summary untouched.
           #
           # Diagnostic (informational) semantics:
-          # - exit 2 is the expected threshold breach: the report is published;
+          # - exit 2 indicates threshold breaches, which are accepted because
+          #   this report is informational: it is published to the summary;
           # - any other nonzero exit fails the job: nothing is appended to the
           #   summary and captured output goes only to stderr/job log.
           candidate_summary="$(mktemp)"
@@ -61,7 +62,7 @@ jobs:
             if [[ "$status" -eq 2 ]]; then
               {
                 echo
-                echo "> ℹ️ The threshold-8 diagnostic report exited 2 as expected; this report is informational by design. Enforcement of the repository's own threshold 8 happens in the self-score step."
+                echo "> ℹ️ The threshold-8 diagnostic report exited 2, indicating threshold breaches. They are accepted here because this report is informational by design; enforcement of the repository's own threshold 8 happens in the self-score step."
               } >> "$candidate_summary"
             fi
             cat "$candidate_summary" >> "$GITHUB_STEP_SUMMARY"
