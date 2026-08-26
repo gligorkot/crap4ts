@@ -304,6 +304,29 @@ export interface MarkdownReportOptions {
   readonly withTable?: boolean;
 }
 
+/** Render the optional per-function GFM table in report order. */
+function renderMarkdownTable(rows: readonly ReportRow[]): string[] {
+  const lines = [
+    "| Function | File | Line | CC | Cov | Threshold | CRAP |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+  ];
+  for (const row of rows) {
+    const breach = row.crap > row.threshold;
+    const name = breach ? `⚠️ ${escapeCell(row.displayName)}` : escapeCell(row.displayName);
+    const coverage = `${(row.coverage * 100).toFixed(1)}%`;
+    lines.push(
+      `| ${name} ` +
+      `| ${escapeCell(shortenPath(row.filePath))} ` +
+      `| ${row.startLine} ` +
+      `| ${row.complexity} ` +
+      `| ${coverage} ` +
+      `| ${row.threshold.toFixed(1)} ` +
+      `| ${row.crap.toFixed(1)} |`,
+    );
+  }
+  return lines;
+}
+
 /**
  * Render a PR-friendly Markdown report. The summary is always included; the
  * per-function table is opt-in so job summaries stay compact by default.
@@ -335,22 +358,7 @@ export function renderMarkdownReport(report: CrapReport, options: MarkdownReport
   lines.push("");
 
   if (withTable) {
-    lines.push("| Function | File | Line | CC | Cov | Threshold | CRAP |");
-    lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
-    for (const row of report.rows) {
-      const breach = row.crap > row.threshold;
-      const name = breach ? `⚠️ ${escapeCell(row.displayName)}` : escapeCell(row.displayName);
-      const coverage = `${(row.coverage * 100).toFixed(1)}%`;
-      lines.push(
-        `| ${name} ` +
-        `| ${escapeCell(shortenPath(row.filePath))} ` +
-        `| ${row.startLine} ` +
-        `| ${row.complexity} ` +
-        `| ${coverage} ` +
-        `| ${row.threshold.toFixed(1)} ` +
-        `| ${row.crap.toFixed(1)} |`,
-      );
-    }
+    lines.push(...renderMarkdownTable(report.rows));
   }
   return lines.join("\n");
 }
