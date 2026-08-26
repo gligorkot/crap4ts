@@ -13,7 +13,7 @@ const workflow = readFileSync(workflowPath, "utf8");
 
 describe("CI CRAP report", () => {
   it("publishes the built CLI's Markdown report without masking unexpected errors", () => {
-    expect(workflow).toContain("name: CRAP report (threshold 8; report-only)");
+    expect(workflow).toContain("name: CRAP report (threshold 8; diagnostic)");
     expect(workflow).toContain(
       "node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown",
     );
@@ -26,7 +26,7 @@ describe("CI CRAP report", () => {
   });
 
   it("appends only valid GitHub Markdown — no fenced text code block around the report", () => {
-    const reportStepStart = workflow.indexOf("name: CRAP report (threshold 8; report-only)");
+    const reportStepStart = workflow.indexOf("name: CRAP report (threshold 8; diagnostic)");
     const reportStepEnd = workflow.indexOf("- name:", reportStepStart);
     const reportStep = workflow.slice(reportStepStart, reportStepEnd);
 
@@ -37,7 +37,7 @@ describe("CI CRAP report", () => {
   });
 
   it("keeps unexpected errors out of the summary", () => {
-    const reportStepStart = workflow.indexOf("name: CRAP report (threshold 8; report-only)");
+    const reportStepStart = workflow.indexOf("name: CRAP report (threshold 8; diagnostic)");
     const reportStepEnd = workflow.indexOf("- name:", reportStepStart);
     const reportStep = workflow.slice(reportStepStart, reportStepEnd);
 
@@ -47,7 +47,7 @@ describe("CI CRAP report", () => {
   });
 
   it("keeps the strict self-score audit after the report", () => {
-    const reportStep = workflow.indexOf("name: CRAP report (threshold 8; report-only)");
+    const reportStep = workflow.indexOf("name: CRAP report (threshold 8; diagnostic)");
     const selfScoreStep = workflow.indexOf("name: Self-score (own-source gate at threshold 8)");
 
     expect(reportStep).toBeGreaterThan(-1);
@@ -116,7 +116,7 @@ describe("CI CRAP report", () => {
 
       const after = readFileSync(join(scratch, "summary.md"), "utf8");
       expect(after.startsWith(before)).toBe(true);
-      expect(after).toContain("Temporary policy");
+      expect(after).toContain("Diagnostic report");
       expect(after).toContain("exited 2 as expected");
     });
   });

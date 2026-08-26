@@ -29,7 +29,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: CRAP report (threshold 8; report-only)
+      - name: CRAP report (threshold 8; diagnostic)
         shell: bash
         run: |
           # Buffer the COMPLETE candidate summary (policy block + Markdown
@@ -37,7 +37,7 @@ jobs:
           # exits 0 or 2 do we append it to $GITHUB_STEP_SUMMARY, so an
           # unexpected exit leaves an initially populated summary untouched.
           #
-          # Report-only semantics:
+          # Diagnostic (informational) semantics:
           # - exit 2 is the expected threshold breach: the report is published;
           # - any other nonzero exit fails the job: nothing is appended to the
           #   summary and captured output goes only to stderr/job log.
@@ -46,7 +46,7 @@ jobs:
           trap 'rm -f "$candidate_summary" "$report_output"' EXIT
 
           {
-            echo "> ⚠️ **Temporary policy:** CRAP violations above the default threshold of 8 are reported, not enforced in CI. The self-score audit below enforces the repository's own threshold 8 and passes only when zero own-source rows have a CRAP score strictly above it."
+            echo "> ℹ️ **Diagnostic report:** the built CLI's threshold-8 own-source CRAP report below is intentionally informational — it is appended to this summary and does not fail the job on exit 2. The enforced own-source threshold-8 gate for this repository is `npm run self-score`, which runs after this step."
             echo
           } > "$candidate_summary"
 
@@ -61,7 +61,7 @@ jobs:
             if [[ "$status" -eq 2 ]]; then
               {
                 echo
-                echo "> ℹ️ The threshold-8 report exited 2 as expected; violations are report-only for now."
+                echo "> ℹ️ The threshold-8 diagnostic report exited 2 as expected; this report is informational by design. Enforcement of the repository's own threshold 8 happens in the self-score step."
               } >> "$candidate_summary"
             fi
             cat "$candidate_summary" >> "$GITHUB_STEP_SUMMARY"
@@ -82,7 +82,4 @@ jobs:
         # the rows. It passes (exit 0) only when no row's CRAP score is
         # strictly above threshold 8; otherwise it prints every breached row
         # and exits 1. It exits non-zero on missing/stale coverage,
-        # uninterpretable CLI results, or an unprovable report. The retired
-        # premise — that the gate expects a threshold-30 breach with
-        # parseArgs/main rows — no longer applies: the threshold-8
-        # remediation left the own-source report clean.
+        # uninterpretable CLI results, or an unprovable report.

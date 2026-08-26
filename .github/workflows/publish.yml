@@ -72,6 +72,10 @@ jobs:
             exit 1
           fi
 
+      - name: Release tarball smoke check
+        if: steps.version.outputs.published == 'false'
+        run: npm run release-smoke
+
       - name: Publish (npm OIDC trusted publishing)
         if: steps.version.outputs.published == 'false'
         run: npm publish

@@ -408,21 +408,21 @@ jobs:
       - run: npm run typecheck
       - run: npm run coverage
       - run: npm run build
-      - name: CRAP report (threshold 8; report-only)
+      - name: CRAP report (threshold 8; diagnostic)
         run: |
           # Append the built CLI's Markdown report to $GITHUB_STEP_SUMMARY.
-          # Exit 2 is accepted only as the expected report-only threshold breach;
-          # every other nonzero exit fails the job and never publishes a summary.
+          # Exit 2 is accepted as the expected outcome of this intentionally
+          # informational report; every other nonzero exit fails the job and
+          # never publishes a summary.
           node dist/cli.js src --coverage coverage/coverage-final.json --threshold 8 --format markdown
       - run: npm run self-score
 ```
 
-The CLI's default threshold is **8**. Temporarily, CI publishes the built
-CLI's threshold-8 own-source report to the GitHub Job Summary but does not
-fail the job for its expected exit code 2. The summary explicitly marks these
-violations as report-only. This visibility period is temporary: eventual
-threshold-8 enforcement requires remediation (coverage and/or refactoring),
-not silently raising the default threshold.
+The CLI's default threshold is **8**. CI publishes the built CLI's
+threshold-8 own-source report to the GitHub Job Summary as an intentional,
+informational diagnostic: it is visible on every run and does not fail the job
+on its expected exit code 2. The **enforced** own-source threshold-8 gate is
+the `self-score` script described below.
 
 The `self-score` script (`scripts/self-score.ts`, run via tsx) runs the
 real source CLI (`tsx src/cli.ts`) against this repo's own `src/` directory
@@ -435,10 +435,7 @@ have a CRAP score strictly above their applicable threshold (threshold 8)**
 — the breach counts are recomputed from the rows, never trusted from the
 summary. On success it prints an audit block with the function count,
 coverage-matched count, maximum CRAP, and the breached-row count (0). Any
-other outcome — including any breached row — exits 1. The previous premise
-that the gate expects a threshold-30 breach from `parseArgs`/`main` is
-retired: after the threshold-8 remediation the own-source report is clean,
-so the gate now passes exactly when it stays clean.
+other outcome — including any breached row — exits 1.
 
 ## Current v1 support and limitations
 
