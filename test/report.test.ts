@@ -187,6 +187,17 @@ describe("renderMarkdownReport", () => {
     expect(text).toContain("weird\\|name");
   });
 
+  it("renders summary before the table so non-empty reports end with the table", () => {
+    const report = buildReport([makeFn("bad", 4, 1, 1, 0)], 8);
+    const text = renderMarkdownReport(report);
+    const summaryIndex = text.indexOf("**Threshold:**");
+    const tableIndex = text.indexOf("| Function | File | Line | CC | Cov | Threshold | CRAP |");
+    expect(summaryIndex).toBeGreaterThan(-1);
+    expect(tableIndex).toBeGreaterThan(summaryIndex);
+    expect(text.trimEnd()).toMatch(/\| \d+(\.\d+)? \|$/);
+    expect(text).toContain("⚠️ bad");
+  });
+
   it("handles empty reports gracefully", () => {
     const report = buildReport([], 8);
     const text = renderMarkdownReport(report);

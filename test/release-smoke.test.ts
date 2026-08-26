@@ -53,14 +53,14 @@ describe("release smoke wiring", () => {
 });
 
 describe("release metadata", () => {
-  it("is version 1.0.0", () => {
-    expect(packageJson.version).toBe("1.0.0");
+  it("is version 1.0.1", () => {
+    expect(packageJson.version).toBe("1.0.1");
     const lock = JSON.parse(readFileSync(resolve(projectRoot, "package-lock.json"), "utf8")) as {
       version: string;
       packages: Record<string, { version?: string }>;
     };
-    expect(lock.version).toBe("1.0.0");
-    expect(lock.packages[""]?.version).toBe("1.0.0");
+    expect(lock.version).toBe("1.0.1");
+    expect(lock.packages[""]?.version).toBe("1.0.1");
   });
 
   it("documents the static-config breaking change for consumers", () => {
