@@ -28,6 +28,7 @@ import type {
 import { DEFAULT_THRESHOLD } from "../src/crap.js";
 import { buildReport } from "../src/report.js";
 import type { CrapReport, ReportRow } from "../src/report.js";
+import { loadConfig } from "../src/config.js";
 import type { LoadedConfig } from "../src/config.js";
 
 /** Structural mirror of coverage.ts's internal IstanbulCoverage shape. */
@@ -158,6 +159,16 @@ function runPipeline(ctx: CliRunContext, cwd: string): FakeIo {
   return io;
 }
 
+/** Synchronous wrapper around the async loadConfig for test setup. */
+function loadConfigForTest(projectRoot: string, explicitPath: string): LoadedConfig {
+  const loaded = loadConfig(projectRoot, explicitPath) as LoadedConfig | undefined
+    | Promise<LoadedConfig | undefined>;
+  if (loaded instanceof Promise || loaded === undefined) {
+    throw new Error("expected the config to load synchronously in tests");
+  }
+  return loaded;
+}
+
 describe("effectiveDefaultThreshold", () => {
   it("prefers the CLI threshold over config and the default", () => {
     const loaded = {
@@ -189,21 +200,23 @@ describe("effectiveChangedSince", () => {
 });
 
 describe("resolveCliRun", () => {
-  it("resolves CLI source paths against cwd and config src against the project root", () => {
+  it("resolves CLI source paths against cwd and config src against the config directory", () => {
     const cwd = path.resolve("/work");
+    const proj = path.resolve("/proj");
     const loaded: LoadedConfig = {
       config: { version: 1, src: ["lib", "src2"] },
-      configPath: path.join(cwd, "crap4ts.config.json"),
-      projectRoot: path.resolve("/proj"),
+      configPath: path.join(proj, "configs", "crap4ts.config.json"),
+      projectRoot: proj,
+      configRoot: path.join(proj, "configs"),
     };
     const explicit = resolveCliRun(context({ args: args({ sourcePaths: ["sub", "x/y.ts"] }), loaded }), cwd);
-    expect(explicit.projectRoot).toBe(path.resolve("/proj"));
+    expect(explicit.projectRoot).toBe(proj);
     expect(explicit.sourcePaths).toEqual([path.join(cwd, "sub"), path.join(cwd, "x", "y.ts")]);
 
     const fromConfig = resolveCliRun(context({ loaded, args: args({ sourcePaths: [] }) }), cwd);
     expect(fromConfig.sourcePaths).toEqual([
-      path.join(path.resolve("/proj"), "lib"),
-      path.join(path.resolve("/proj"), "src2"),
+      path.join(proj, "configs", "lib"),
+      path.join(proj, "configs", "src2"),
     ]);
     expect(fromConfig.config).toBe(loaded.config);
 
@@ -449,6 +462,50 @@ describe("runCliPipeline (direct, in-process)", () => {
     const parsed = JSON.parse(io.outText) as { summary: { threshold: number; breached: boolean } };
     expect(parsed.summary).toMatchObject({ threshold: 8, breached: false });
     expect(io.outText.endsWith("\n")).toBe(true);
+  });
+
+  it("analyzes the directory a nested --config's src validates (end to end)", () => {
+    // Nested layout: the config lives in <project>/configs and declares
+    // src "src". The source file exists only under configs/src, so the run
+    // can only succeed when config src resolves against the config
+    // directory — the invocation root has no src to analyze.
+    const project = tempProject();
+    fs.mkdirSync(path.join(project, "configs"));
+    const nestedFile = path.join(project, "configs", "src", "a.ts");
+    fs.mkdirSync(path.join(project, "configs", "src"));
+    fs.writeFileSync(nestedFile, SOURCE);
+    fs.writeFileSync(
+      path.join(project, "configs", "check.json"),
+      JSON.stringify({ version: 1, src: "src" }),
+    );
+    writeCoverage(
+      project,
+      coverageFor(fs.realpathSync.native(nestedFile), { "0": 3, "1": 2, "2": 1 }),
+    );
+
+    // Negative proof first: without a loaded config, the default "src"
+    // resolution against the invocation root finds nothing (the directory
+    // does not exist), which is an invalid-input exit.
+    const empty = runPipeline(context({ args: args({ sourcePaths: [] }) }), project);
+    expect(empty.exitCode).toBe(1);
+    expect(empty.errText).toBe("Error: no source paths provided and config has no src\n");
+
+    // Positive proof: loading the nested config analyzes exactly the
+    // validated configs/src directory and matches its coverage.
+    const loaded = loadConfigForTest(project, path.join("configs", "check.json"));
+    expect(loaded.configRoot).toBe(path.join(fs.realpathSync(project), "configs"));
+    const io = runPipeline(
+      context({ args: args({ format: "json", sourcePaths: [] }), loaded }),
+      project,
+    );
+    expect(io.exitCode).toBe(0);
+    expect(io.errText).toBe("");
+    const parsed = JSON.parse(io.outText) as { rows: Array<{ filePath: string; name: string }> };
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]).toMatchObject({
+      name: "f",
+      filePath: path.join(loaded.configRoot, "src", "a.ts"),
+    });
   });
 
   it("exits 2 with the exact breach line when the gate fails", () => {

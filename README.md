@@ -196,7 +196,11 @@ JSON config has the same shape without `defineConfig`:
 `src` and `exclude` accept a string or an array of strings. `src` must contain
 at least one project-relative path and may not be absolute or escape the config
 file's directory; this keeps exclude and per-path threshold matching unambiguous.
-Config paths and globs are relative to the config file's directory. `exclude`
+Config paths, globs, and exclusions are relative to the config file's
+directory — including for a nested file chosen with `--config`, so the analyzed
+sources are always exactly the ones validated against that config's own
+directory. The containing project root (the invocation root) still bounds where
+the selected config file itself may live. `exclude`
 uses a small, deterministic glob language: `*` matches within one path segment,
 `**` matches across segments, and `?` matches one non-separator character. The
 built-in exclusions for declaration files, `node_modules`, `dist`, `coverage`,
@@ -210,14 +214,33 @@ applies; if it is absent the default is 8.
 Each JSON report row and each human table row includes its applicable threshold,
 and the gate evaluates that row's CRAP score against that threshold.
 
-TypeScript and JavaScript configs execute local project code. Only run crap4ts
-against repositories whose configuration you trust. TypeScript config loading
-uses the package's TypeScript dependency at runtime and executes the transpiled
-module in memory with resolution rooted at the config file; the built `dist/cli.js`
-never writes generated files into the project. Use `.mjs` for portable ESM and
-`.cjs` for portable CommonJS. A `.js` config follows Node's normal module-system
-rules from the nearest `package.json` (`type: "module"` for ESM; otherwise
-CommonJS), so it is not a universal ESM form.
+Configuration files are declarative and are never executed. crap4ts parses
+them statically and accepts only literal config data: arbitrary code,
+expressions, references, spreads, computed keys, and calls (other than the
+exact `defineConfig({ ... })` wrapper) are rejected as invalid config. Import
+declarations in TS/ESM configs are tolerated syntactically but the imported
+packages are never resolved or loaded at runtime.
+
+The selected or discovered config file — including through symlinks — must
+resolve inside the project root; a `--config` path or symlink that escapes it
+is an input error.
+
+TypeScript and JavaScript configs accept exactly these shapes:
+
+- `export default { ... }` (TS, `.mjs`, `.js`)
+- `export default defineConfig({ ... })` with an optional import declaration
+  for `defineConfig` (the import is never resolved)
+- `module.exports = { ... }` (`.cjs`, CommonJS-style `.js`)
+
+All values must be literals (strings, numbers, booleans, arrays, plain
+objects). Each extension enforces its module system exactly: `.ts` and `.mjs`
+configs accept only the ESM static default-export forms; `.cjs` accepts only
+the exact CommonJS form; a `.js` config may deliberately use either form, but
+never both. A bare `exports = ...` assignment is rejected in every extension,
+ESM exports are rejected in `.cjs`, CommonJS assignments are rejected in
+`.ts`/`.mjs`, mixed ESM/CommonJS files are rejected, and a second export is
+rejected rather than silently overriding the first. Use `.mjs` for portable ESM
+and `.cjs` for portable CommonJS.
 
 ## Changed-only gates
 

@@ -242,20 +242,20 @@ describe("config file loading", () => {
 
   it("reports missing, unreadable, and non-file config paths", async () => {
     const project = tempProject();
-    await expect(loadConfig(project, "missing.json")).rejects.toThrow("config file cannot be read");
-    await expect(loadConfig(project, "src")).rejects.toThrow("config path is not a file");
+    expect(() => loadConfig(project, "missing.json")).toThrow("config file cannot be read");
+    expect(() => loadConfig(project, "src")).toThrow("config path is not a file");
   });
 
   it("wraps invalid config content in the config path", async () => {
     const project = tempProject();
     fs.writeFileSync(path.join(project, "bad.json"), "{ not json");
-    await expect(loadConfig(project, "bad.json")).rejects.toThrow(/invalid config .*bad\.json/);
+    expect(() => loadConfig(project, "bad.json")).toThrow(/invalid config .*bad\.json/);
     fs.writeFileSync(path.join(project, "wrong-ts.ts"), "export default { version: 2 };\n");
-    await expect(loadConfig(project, "wrong-ts.ts")).rejects.toThrow(/config\.version must be/);
+    expect(() => loadConfig(project, "wrong-ts.ts")).toThrow(/config\.version must be/);
     fs.writeFileSync(path.join(project, "broken.ts"), "export default { version: 1, src:\n");
-    await expect(loadConfig(project, "broken.ts")).rejects.toThrow(/invalid config .*broken\.ts/);
+    expect(() => loadConfig(project, "broken.ts")).toThrow(/invalid config .*broken\.ts/);
     fs.writeFileSync(path.join(project, "not-object.ts"), "export default 42;\n");
-    await expect(loadConfig(project, "not-object.ts")).rejects.toThrow(/config must export an object/);
+    expect(() => loadConfig(project, "not-object.ts")).toThrow(/config must export an object/);
   });
 
   it("enforces project-path safety for config file src entries", async () => {
@@ -264,16 +264,67 @@ describe("config file loading", () => {
     tempDirs.push(outside);
 
     fs.writeFileSync(path.join(project, "a.json"), JSON.stringify({ version: 1, src: "no-such-dir" }));
-    await expect(loadConfig(project, "a.json")).rejects.toThrow('config.src cannot be resolved, got "no-such-dir"');
+    expect(() => loadConfig(project, "a.json")).toThrow('config.src cannot be resolved, got "no-such-dir"');
 
     fs.writeFileSync(path.join(project, "b.json"), JSON.stringify({ version: 1, src: "../escape" }));
-    await expect(loadConfig(project, "b.json")).rejects.toThrow('config.src must contain project-relative paths, got "../escape"');
+    expect(() => loadConfig(project, "b.json")).toThrow('config.src must contain project-relative paths, got "../escape"');
 
     fs.symlinkSync(outside, path.join(project, "linked"), "dir");
     fs.writeFileSync(path.join(project, "c.json"), JSON.stringify({ version: 1, src: "linked" }));
-    await expect(loadConfig(project, "c.json")).rejects.toThrow('config.src must contain project-relative paths, got "linked"');
+    expect(() => loadConfig(project, "c.json")).toThrow('config.src must contain project-relative paths, got "linked"');
 
     fs.writeFileSync(path.join(project, "d.json"), JSON.stringify({ version: 1, src: "src" }));
     expect((await loadConfig(project, "d.json"))?.config.src).toBe("src");
+  });
+
+  it("anchors a nested explicit config's src to the config directory, not the invocation root", async () => {
+    // Layout: <project>/configs/check.json with src "src" — only
+    // <project>/configs/src exists. Validation resolves src against the
+    // config directory; the loaded result must expose the same base so CLI
+    // analysis matches exactly what was validated.
+    const project = tempProject();
+    fs.mkdirSync(path.join(project, "configs", "src"), { recursive: true });
+    fs.writeFileSync(path.join(project, "configs", "check.json"), JSON.stringify({ version: 1, src: "src", threshold: 3 }));
+
+    const loaded = await loadConfig(project, path.join("configs", "check.json"));
+    expect(loaded?.configRoot).toBe(fs.realpathSync(path.join(project, "configs")));
+    expect(loaded?.projectRoot).toBe(fs.realpathSync(project));
+  });
+
+  it("matches exclusion and threshold globs against the config directory for nested configs", async () => {
+    const project = tempProject();
+    fs.mkdirSync(path.join(project, "configs", "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(project, "configs", "check.json"),
+      JSON.stringify({
+        version: 1,
+        src: "src",
+        exclude: ["src/generated.ts"],
+        thresholds: [{ glob: "src/special.ts", threshold: 20 }],
+      }),
+    );
+    const loaded = await loadConfig(project, path.join("configs", "check.json"));
+    if (loaded === undefined) throw new Error("expected the nested config to load");
+
+    const matchedFile = path.join(loaded.configRoot, "src", "special.ts");
+    const excludedFile = path.join(loaded.configRoot, "src", "generated.ts");
+    expect(isConfigExcluded(excludedFile, loaded.configRoot, loaded.config)).toBe(true);
+    expect(isConfigExcluded(matchedFile, loaded.configRoot, loaded.config)).toBe(false);
+    expect(thresholdForPath(matchedFile, loaded.configRoot, loaded.config, undefined)).toBe(20);
+    // The same globs must NOT match files under an unrelated root.
+    expect(isConfigExcluded(excludedFile, project, loaded.config)).toBe(false);
+    expect(matchesConfigPattern(matchedFile, project, "src/special.ts")).toBe(false);
+  });
+
+  it("keeps discovery anchored at the project root while exposing its own config root", async () => {
+    const project = tempProject();
+    fs.writeFileSync(
+      path.join(project, "crap4ts.config.ts"),
+      "export default { version: 1, src: 'src', threshold: 9 };",
+    );
+    const loaded = await loadConfig(project);
+    if (loaded === undefined) throw new Error("expected the discovered config to load");
+    expect(loaded.configRoot).toBe(fs.realpathSync(project));
+    expect(loaded.configRoot).toBe(loaded.projectRoot);
   });
 });
